@@ -861,9 +861,13 @@ function renderSettings() {
       <h3>くろとおはなし</h3>
       <label for="set-chat-model">モデル</label>
       <select id="set-chat-model">${CHAT_MODELS.map(([id, label]) => `<option value="${id}"${id === chatModel() ? " selected" : ""}>${label}</option>`).join("")}</select>
+${viaBridge ? `
+      <label for="set-chat-key">ブリッジの合言葉（Mac のターミナルに出る6けた）</label>
+      <input id="set-chat-key" inputmode="numeric" maxlength="6" placeholder="${store.get("bridgeCode") ? "保存ずみ（変えるときだけ入れる）" : "6けた"}" autocomplete="off">
+      <button class="btn-main" id="set-chat-save">合言葉を保存</button>` : `
       <label for="set-chat-key">Claude APIキー</label>
       <input id="set-chat-key" type="password" placeholder="${store.get("anthropicKey") ? "保存ずみ（変えるときだけ貼る）" : "sk-ant-..."}" autocapitalize="none" autocorrect="off" spellcheck="false">
-      <button class="btn-main" id="set-chat-save">キーを保存</button>
+      <button class="btn-main" id="set-chat-save">キーを保存</button>`}
       <div class="form-msg" id="set-chat-msg"></div>
       <p class="form-hint">モデルは選ぶとすぐ切りかわるよ（キーの入れ直しはいらない）。APIキーはこのiPhoneの中にだけ保存されるよ。話した分だけ料金がかかるから、Claude Console で月の上限額を決めておいてね。</p>
     </div>`;
@@ -871,11 +875,11 @@ function renderSettings() {
 function saveChatSettings() {
   store.set("chatModel", document.getElementById("set-chat-model").value);
   const key = clean(document.getElementById("set-chat-key").value);
-  if (key) store.set("anthropicKey", key);
+  if (key) store.set(viaBridge ? "bridgeCode" : "anthropicKey", key);
   document.getElementById("set-chat-key").value = "";
   const msg = document.getElementById("set-chat-msg");
-  msg.className = store.get("anthropicKey") ? "form-msg ok" : "form-msg ng";
-  msg.textContent = store.get("anthropicKey") ? "保存したよ！右下のくろをタップしてね" : "APIキーを入れてね";
+  msg.className = chatReady() ? "form-msg ok" : "form-msg ng";
+  msg.textContent = chatReady() ? "保存したよ！右下のくろをタップしてね" : viaBridge ? "合言葉を入れてね" : "APIキーを入れてね";
   renderChatHead();
 }
 async function saveSettings() {
@@ -920,6 +924,10 @@ const INBOX_TOOL = {
   },
 };
 let chat = null, chatBusy = false, chatPics = [];
+// 実験（try-claude-cli）: Mac のくろブリッジが配っているページ（http://…/app/）で開いたときは、
+// Claude API のかわりに Mac の Claude Code（claude -p）で話す。APIキーはいらない、かわりにブリッジの合言葉
+const viaBridge = location.protocol === "http:" && location.pathname.startsWith("/app/");
+const chatReady = () => !!store.get(viaBridge ? "bridgeCode" : "anthropicKey");
 
 function loadChat() {
   const today = jstNow().date;
@@ -981,14 +989,14 @@ function fitChat() {
 }
 function renderChatHead() {
   const sub = document.getElementById("chat-sub");
-  if (sub) sub.textContent = `今日は${VAULT ? modeOf(jstNow().date) : ""}モード ・ ${CHAT_MODELS.find(m => m[0] === chatModel())[1]}`;
+  if (sub) sub.textContent = `今日は${VAULT ? modeOf(jstNow().date) : ""}モード ・ ${viaBridge ? "Mac の Claude Code ・ " : ""}${CHAT_MODELS.find(m => m[0] === chatModel())[1]}`;
 }
 
 function renderChat() {
   renderChatHead();
   const log = document.getElementById("chat-log");
   const items = [];
-  if (!store.get("anthropicKey")) items.push(`<div class="bubble note">「せってい」で Claude APIキーを入れると、くろとおはなしできるよ</div>`);
+  if (!chatReady()) items.push(`<div class="bubble note">「せってい」で ${viaBridge ? "ブリッジの合言葉" : "Claude APIキー"}を入れると、くろとおはなしできるよ</div>`);
   else if (!chat.messages.length) items.push(`<div class="bubble kuro">サキちゃん、なになに？ なんでも話してね🐾</div>`);
   chat.messages.forEach((m, i) => {
     const blocks = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content;
@@ -1046,7 +1054,20 @@ ${recent || "（まだ読めていない）"}
 返事は必ずタメ口（敬語なし）で、サキちゃんと呼び、短めに。`;
 }
 
+// ブリッジは Claude API と同じ形（content・stop_reason）で返してくれる
+async function callBridge() {
+  const r = await fetch("/chat", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-kuro-code": store.get("bridgeCode") },
+    body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel() }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`${r.status} ${j.error || ""}`.trim());
+  return j;
+}
+
 async function callClaude() {
+  if (viaBridge) return callBridge();
   const model = chatModel();
   const sonnet = model.startsWith("claude-sonnet");
   const headers = {
@@ -1073,7 +1094,7 @@ async function chatSend() {
   const ta = document.getElementById("chat-text");
   const text = ta.value.trim();
   if ((!text && !chatPics.length) || chatBusy) return;
-  if (!store.get("anthropicKey")) { renderChat(); return; }
+  if (!chatReady()) { renderChat(); return; }
   // 前のくろの返事に提案があれば、その答えを先頭に入れる（ボタンを押していなければ「保存しなかった」）
   const content = [];
   const last = chat.messages[chat.messages.length - 1];
