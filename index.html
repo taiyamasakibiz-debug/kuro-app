@@ -803,7 +803,8 @@ async function uploadPics(pics, date, title, message) {
   for (const [i, d] of pics.entries()) names.push(await ghCreate("attachments", `${date}-${title}${pics.length > 1 ? `-${i + 1}` : ""}`, "jpg", d, message));
   return names;
 }
-const safeTitle = (t, fallback) => (t.replace(/[\\/:*?"<>|#\[\]^]/g, "").trim() || fallback).slice(0, 20);
+// ファイル名の先頭には日付をつけるので、タイトル側の日付は外す
+const safeTitle = (t, fallback) => (t.replace(/^\s*\d{4}-\d{2}-\d{2}[\s\-_]*/, "").replace(/[\\/:*?"<>|#\[\]^]/g, "").trim() || fallback).slice(0, 20);
 
 let memoPics = [];
 function renderMemo() {
@@ -905,7 +906,7 @@ const INBOX_TOOL = {
   input_schema: {
     type: "object", additionalProperties: false, required: ["title", "body", "attach_images"],
     properties: {
-      title: { type: "string", description: "ファイル名になる短いタイトル（日本語、20文字以内）" },
+      title: { type: "string", description: "ファイル名になる短いタイトル（日本語、20文字以内）。日付は自動でつくので入れない" },
       body: { type: "string", description: "ノートの本文。サキちゃんの言葉は要約しつつ、事実と気づきを分けて書く。推測で盛らない" },
       attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像も一緒に保存するなら true" },
     },
