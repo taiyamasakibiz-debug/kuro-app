@@ -272,7 +272,7 @@ main { position: relative; z-index: 1; max-width: 1040px; margin: 0 auto; paddin
 .empty-note a { color: inherit; }
 /* くろアプリ版（body.app）: 上はタイトルだけ、タブは画面の下に固定。ひとこと・せってい */
 body.app .top-inner { padding-block: 10px; }
-body.app .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; margin: 0; background: var(--paper); border-top: 1px solid var(--rule);
+body.app .tabs { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; transform: translateZ(0); margin: 0; background: var(--paper); border-top: 1px solid var(--rule);
   padding: 0 max(8px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(8px, env(safe-area-inset-left, 0px)); }
 body.app .tab { padding: 12px 12px 14px; border-bottom: 0; border-top: 3px solid transparent; }
 body.app .tab[aria-current="true"] { border-top-color: var(--crayon); }
@@ -674,6 +674,8 @@ function ghWatch() {
 let dataError = "";
 async function loadRemote() {
   document.body.classList.add("app");
+  // タブを sticky のヘッダーの外に出す（中に入れたまま fixed にすると、iOS Safari でスクロール中に文字が消える）
+  document.body.appendChild(document.getElementById("tabs"));
   ghWatch();
   if (!gh.token) { location.hash = "settings"; route(); return; }
   if (!location.hash || location.hash === "#settings") location.hash = "diary";
