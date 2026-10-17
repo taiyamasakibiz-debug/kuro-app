@@ -194,7 +194,9 @@ async function loadYesterday() {
     const j = await r.json();
     const lines = unb64(j.content).replace(/^---[\s\S]*?---\n/, "").split("\n")
       .map((l) => l.trim()).filter((l) => l && !l.startsWith("#") && !l.startsWith("!["));
-    box.textContent = lines.slice(0, 6).join("\n") || "（中身がまだ空っぽ）";
+    const pretty = lines.slice(0, 6).map((l) =>
+      l.replace(/^[-*]\s+/, "・").replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, n, alias) => alias || n).replace(/`/g, ""));
+    box.textContent = pretty.join("\n") || "（中身がまだ空っぽ）";
   } catch (e) {
     box.textContent = "読めなかった…せっていのトークンを確認してね";
   }
