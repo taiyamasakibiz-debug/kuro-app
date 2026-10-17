@@ -165,7 +165,7 @@ function renderToday() {
 // ---- GitHub API ----
 const api = (path, opt = {}) => {
   const { repo, token } = cfg();
-  return fetch(`https://api.github.com/repos/${repo}/${path}`, {
+  return fetch(`https://api.github.com/repos/${repo}${path ? "/" + path : ""}`, {
     ...opt,
     headers: {
       Authorization: `Bearer ${token}`,
