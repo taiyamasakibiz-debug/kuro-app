@@ -130,6 +130,8 @@ const cfg = () => ({
   token: store.get("token"),
 });
 const $ = (id) => document.getElementById(id);
+// 貼り付けで混ざる空白・改行・見えない文字を取る
+const clean = (v) => v.replace(/[\s\u200B-\u200D\uFEFF\u2060]/g, "");
 
 // ---- 日付（日本時間） ----
 function jst(offsetDays = 0) {
@@ -233,21 +235,22 @@ async function send() {
 
 // ---- 設定 ----
 async function saveSettings() {
-  store.set("repo", $("repo").value.trim());
-  store.set("branch", $("branch").value.trim() || "main");
-  if ($("token").value.trim()) store.set("token", $("token").value.trim());
+  store.set("repo", clean($("repo").value));
+  store.set("branch", clean($("branch").value) || "main");
+  if (clean($("token").value)) store.set("token", clean($("token").value));
   const msg = $("setMsg");
   msg.className = "msg"; msg.textContent = "テスト中…";
   try {
+    if (!cfg().token) throw new Error("トークンが空っぽ");
     const r = await api("");
-    if (!r.ok) throw new Error(r.status);
     const j = await r.json();
+    if (!r.ok) throw new Error(`${r.status} ${j.message || ""}（トークン${cfg().token.length}文字 / ${cfg().repo}）`);
     const canPush = j.permissions && j.permissions.push;
     msg.className = canPush ? "msg ok" : "msg ng";
     msg.textContent = canPush ? "つながったよ！読み書きOK" : "読めるけど書けない…Contentsを Read and write にしてね";
     $("token").value = "";
   } catch (e) {
-    msg.className = "msg ng"; msg.textContent = `つながらない（${e.message}）。トークンとリポジトリ名を確認してね`;
+    msg.className = "msg ng"; msg.textContent = `つながらない：${e.message}`;
   }
 }
 
