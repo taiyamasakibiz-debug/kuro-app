@@ -313,6 +313,18 @@ body.chat-open .chat { display: flex; }
 .chat-input { display: flex; gap: 8px; align-items: flex-end; background: var(--paper); border-top: 1px solid var(--rule); padding: 8px max(12px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
 .chat-input textarea { flex: 1; resize: none; max-height: 140px; font: inherit; font-size: 16px; color: var(--ink); background: var(--desk); border: 0; border-radius: 18px; padding: 9px 14px; line-height: 1.5; }
 .chat-input .btn-main { border-radius: 18px; padding: 9px 16px; }
+/* 画像を貼る（ひとこと・チャット） */
+.pic-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; }
+.pic-btn input { display: none; }
+.chat-input .pic-btn { width: 40px; height: 40px; flex: none; border-radius: 50%; background: var(--desk); font-size: 1.15rem; }
+.pics { display: flex; gap: 8px; flex-wrap: wrap; }
+.pics:empty { display: none; }
+.pic { position: relative; width: 72px; height: 72px; }
+.pic img { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; display: block; }
+.pic button { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; border-radius: 50%; border: 0; background: var(--ink); color: var(--paper); font-size: .7rem; line-height: 1; cursor: pointer; }
+.chat-pics { padding: 8px max(12px, env(safe-area-inset-right, 0px)) 0 max(12px, env(safe-area-inset-left, 0px)); background: var(--paper); }
+.bubble.me.has-pic { padding: 4px; background: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
+.bubble .chat-img { max-width: 200px; max-height: 240px; border-radius: 12px; display: block; }
 </style>
 
 <div class="room-bg" id="room-bg" aria-hidden="true"></div>
@@ -645,7 +657,17 @@ document.addEventListener("input", e => {
   if (e.target.id === "note-q") { noteQuery = e.target.value; fillNotes(); }
   else if (e.target.id === "memo-text") store.set("draft", e.target.value);
 });
+document.addEventListener("change", async e => {
+  if (e.target.id !== "memo-file") return;
+  const msg = document.getElementById("memo-msg");
+  try { for (const f of e.target.files) memoPics.push(await shrinkImage(f, 1600)); }
+  catch { msg.className = "form-msg ng"; msg.textContent = "この画像は読めなかった…"; }
+  e.target.value = "";
+  document.getElementById("memo-pics").innerHTML = picHtml(memoPics, "data-memo-unpic");
+});
 document.addEventListener("click", e => {
+  const un = e.target.closest("[data-memo-unpic]");
+  if (un) { memoPics.splice(+un.dataset.memoUnpic, 1); document.getElementById("memo-pics").innerHTML = picHtml(memoPics, "data-memo-unpic"); return; }
   if (e.target.id === "memo-send") sendMemo();
   else if (e.target.id === "set-save") saveSettings();
   else if (e.target.id === "set-chat-save") saveChatSettings();
@@ -743,10 +765,49 @@ const b64 = text => { let bin = ""; new TextEncoder().encode(text).forEach(b => 
 const jstNow = () => { const s = new Date(Date.now() + 9 * 3600e3).toISOString(); return { date: s.slice(0, 10), hm: s.slice(11, 16).replace(":", "") }; };
 const clean = v => v.replace(/[\s\u200B-\u200D\uFEFF\u2060]/g, "");  // 貼り付けで混ざる空白・見えない文字
 
+/* ---- 画像（くろアプリ版だけ）: iPhoneの中で縮小して JPEG の base64 にする ---- */
+async function shrinkImage(file, maxSide) {
+  let src;
+  try { src = await createImageBitmap(file); }  // 写真の向き（EXIF）も反映される
+  catch {
+    src = await new Promise((ok, ng) => { const im = new Image(); im.onload = () => ok(im); im.onerror = ng; im.src = URL.createObjectURL(file); });
+  }
+  const w = src.width, h = src.height, k = Math.min(1, maxSide / Math.max(w, h));
+  const c = document.createElement("canvas");
+  c.width = Math.round(w * k); c.height = Math.round(h * k);
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);  // 透明な画像は白地に
+  ctx.drawImage(src, 0, 0, c.width, c.height);
+  return c.toDataURL("image/jpeg", 0.85).split(",")[1];
+}
+const picHtml = (list, removeAttr) => list.map((d, i) => `<div class="pic"><img src="data:image/jpeg;base64,${d}" alt=""><button ${removeAttr}="${i}" aria-label="はずす">✕</button></div>`).join("");
+// GitHub にファイルを作る。同じ名前があったら時刻をつける。作ったファイル名を返す
+async function ghCreate(dir, base, ext, content, message) {
+  const { hm } = jstNow();
+  for (const name of [`${base}.${ext}`, `${base}-${hm}.${ext}`, `${base}-${hm}-${Date.now() % 1000}.${ext}`]) {
+    const r = await ghApi(`contents/${dir}/${encodeURIComponent(name)}`, {
+      method: "PUT", body: JSON.stringify({ message: `${dir}: ${name}（${message}）`, content, branch: store.get("branch") || "main" }),
+    });
+    if (r.ok) return name;
+    if (r.status !== 422) throw new Error(r.status);
+  }
+  throw new Error("同じ名前のファイルがある");
+}
+// 画像を attachments/YYYY-MM-DD-タイトル(-n).jpg に置いて、埋め込み用のファイル名を返す
+async function uploadPics(pics, date, title, message) {
+  const names = [];
+  for (const [i, d] of pics.entries()) names.push(await ghCreate("attachments", `${date}-${title}${pics.length > 1 ? `-${i + 1}` : ""}`, "jpg", d, message));
+  return names;
+}
+const safeTitle = (t, fallback) => (t.replace(/[\\/:*?"<>|#\[\]^]/g, "").trim() || fallback).slice(0, 20);
+
+let memoPics = [];
 function renderMemo() {
   $view.innerHTML = `<div class="lead"><h2>くろにひとこと</h2><p>思いついたこと、なんでも。送ると inbox に入るよ。</p></div>
     <div class="form-card">
       <textarea id="memo-text" placeholder="キーボードのマイクで音声入力もできるよ">${esc(store.get("draft") || "")}</textarea>
+      <div class="pics" id="memo-pics">${picHtml(memoPics, "data-memo-unpic")}</div>
+      <label class="btn pic-btn">📷 画像をえらぶ<input type="file" id="memo-file" accept="image/*" multiple></label>
       <button class="btn-main" id="memo-send">inboxに送る</button>
       <div class="form-msg" id="memo-msg"></div>
     </div>`;
@@ -754,21 +815,19 @@ function renderMemo() {
 async function sendMemo() {
   const text = document.getElementById("memo-text").value.trim();
   const msg = document.getElementById("memo-msg"), btn = document.getElementById("memo-send");
-  if (!text) return;
+  if (!text && !memoPics.length) return;
   if (!gh.token) { msg.className = "form-msg ng"; msg.textContent = "先に「せってい」でトークンを入れてね"; return; }
   btn.disabled = true; msg.className = "form-msg"; msg.textContent = "送ってる…";
-  const { date, hm } = jstNow();
-  const title = (text.split("\n")[0].replace(/[\\/:*?"<>|#\[\]^]/g, "").trim() || "ひとこと").slice(0, 20);
-  const body = `---\ntype: inbox\ncreated: ${date}\ntags: [くろアプリ]\n---\n# ${title}\n\n${text}\n`;
-  const put = name => ghApi(`contents/inbox/${encodeURIComponent(name)}`, {
-    method: "PUT", body: JSON.stringify({ message: `inbox: ${name}（くろアプリから）`, content: b64(body), branch: store.get("branch") || "main" }),
-  });
+  const { date } = jstNow();
+  const title = safeTitle(text.split("\n")[0], memoPics.length ? "画像メモ" : "ひとこと");
   try {
-    let r = await put(`${date}-${title}.md`);
-    if (r.status === 422) r = await put(`${date}-${title}-${hm}.md`);  // 同じ名前があったら時刻をつける
-    if (!r.ok) throw new Error(r.status);
+    const names = await uploadPics(memoPics, date, title, "くろアプリから");  // 画像を先に置いてから、メモに貼る
+    const embeds = names.map(n => `![[${n}]]`).join("\n");
+    const body = `---\ntype: inbox\ncreated: ${date}\ntags: [くろアプリ]\n---\n# ${title}\n\n${[text, embeds].filter(Boolean).join("\n\n")}\n`;
+    await ghCreate("inbox", `${date}-${title}`, "md", b64(body), "くろアプリから");
     document.getElementById("memo-text").value = ""; store.set("draft", "");
-    msg.className = "form-msg ok"; msg.textContent = "inboxに入れたよ！ Working Copyでpullしてね";
+    memoPics = []; document.getElementById("memo-pics").innerHTML = "";
+    msg.className = "form-msg ok"; msg.textContent = `inboxに入れたよ！${names.length ? `（画像${names.length}まいも）` : ""} Working Copyでpullしてね`;
   } catch (e) {
     msg.className = "form-msg ng"; msg.textContent = `送れなかった（${e.message}）。下書きは残してあるよ`;
   } finally { btn.disabled = false; }
@@ -837,24 +896,30 @@ const chatModel = () => CHAT_MODELS.some(m => m[0] === store.get("chatModel")) ?
 const CHAT_ICON = "chibi-kuro.png";
 const INBOX_TOOL = {
   name: "save_to_inbox",
-  description: "サキちゃんとの話で、あとで残す価値がありそうな気づき・アイデア・出来事が出たときに、inbox に入れることを提案する。呼ぶと画面に「inboxに入れとく？」のボタンが出て、サキちゃんが決める（勝手には保存されない）。結果は次のサキちゃんの発言といっしょに届く。1回の返事で1つまで。雑談の全文ではなく、面白い気づきだけを要約する。",
+  description: "サキちゃんとの話で、あとで残す価値がありそうな気づき・アイデア・出来事が出たときに、inbox に入れることを提案する。サキちゃんが貼った画像も一緒に残すなら attach_images を true にする（直前に画像を貼った発言の画像が attachments に保存され、ノートに貼られる）。呼ぶと画面に「inboxに入れとく？」のボタンが出て、サキちゃんが決める（勝手には保存されない）。結果は次のサキちゃんの発言といっしょに届く。1回の返事で1つまで。雑談の全文ではなく、面白い気づきだけを要約する。",
   strict: true,
   input_schema: {
-    type: "object", additionalProperties: false, required: ["title", "body"],
+    type: "object", additionalProperties: false, required: ["title", "body", "attach_images"],
     properties: {
       title: { type: "string", description: "ファイル名になる短いタイトル（日本語、20文字以内）" },
       body: { type: "string", description: "ノートの本文。サキちゃんの言葉は要約しつつ、事実と気づきを分けて書く。推測で盛らない" },
+      attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像も一緒に保存するなら true" },
     },
   },
 };
-let chat = null, chatBusy = false;
+let chat = null, chatBusy = false, chatPics = [];
 
 function loadChat() {
   const today = jstNow().date;
   try { chat = JSON.parse(store.get("kuroChat") || "null"); } catch { chat = null; }
   if (!chat || chat.date !== today) chat = { date: today, messages: [], decisions: {}, notes: [] };
 }
-const saveChat = () => store.set("kuroChat", JSON.stringify(chat));
+function saveChat() {
+  try { localStorage.setItem("kuroChat", JSON.stringify(chat)); }
+  catch {  // 画像が多くて入りきらないとき。会話は続けられるけど、アプリを閉じると消える
+    if (!chat.full) { chat.full = true; chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text: "画像が多くて、今日の会話をiPhoneに保存しきれなかった。アプリを閉じると会話が消えるかも" }); }
+  }
+}
 
 function initChat() {
   document.body.insertAdjacentHTML("beforeend", `
@@ -863,7 +928,8 @@ function initChat() {
       <header class="chat-head"><img src="${CHAT_ICON}" alt=""><div><b>くろとおはなし</b><small id="chat-sub"></small></div>
         <button class="btn" id="chat-new">あたらしく</button><button class="icon-btn" id="chat-close" aria-label="とじる">✕</button></header>
       <div class="chat-log" id="chat-log"></div>
-      <div class="chat-input"><textarea id="chat-text" rows="1" placeholder="くろにはなしかける"></textarea><button class="btn-main" id="chat-send">送る</button></div>
+      <div class="pics chat-pics" id="chat-pics"></div>
+      <div class="chat-input"><label class="pic-btn" aria-label="画像をつける">📷<input type="file" id="chat-file" accept="image/*" multiple></label><textarea id="chat-text" rows="1" placeholder="くろにはなしかける"></textarea><button class="btn-main" id="chat-send">送る</button></div>
     </section>`);
   document.getElementById("chat-fab").addEventListener("click", () => { loadChat(); renderChat(); document.body.classList.add("chat-open"); });
   document.getElementById("chat-close").addEventListener("click", () => document.body.classList.remove("chat-open"));
@@ -871,6 +937,15 @@ function initChat() {
   document.getElementById("chat-send").addEventListener("click", chatSend);
   const ta = document.getElementById("chat-text");
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; });
+  const showChatPics = () => { document.getElementById("chat-pics").innerHTML = picHtml(chatPics, "data-chat-unpic"); };
+  document.getElementById("chat-file").addEventListener("change", async e => {
+    try { for (const f of e.target.files) chatPics.push(await shrinkImage(f, 1280)); } catch {}
+    e.target.value = ""; showChatPics();
+  });
+  document.getElementById("chat-pics").addEventListener("click", e => {
+    const un = e.target.closest("[data-chat-unpic]");
+    if (un) { chatPics.splice(+un.dataset.chatUnpic, 1); showChatPics(); }
+  });
   document.getElementById("chat-log").addEventListener("click", e => {
     const b = e.target.closest("[data-inbox]");
     if (b) decideInbox(b.dataset.inbox, b.dataset.answer === "yes");
@@ -889,6 +964,8 @@ function renderChat() {
   else if (!chat.messages.length) items.push(`<div class="bubble kuro">サキちゃん、なになに？ なんでも話してね🐾</div>`);
   chat.messages.forEach((m, i) => {
     const blocks = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content;
+    const imgs = blocks.filter(b => b.type === "image");
+    if (imgs.length) items.push(`<div class="bubble me has-pic">${imgs.map(b => `<img class="chat-img" src="data:${b.source.media_type};base64,${b.source.data}" alt="">`).join("")}</div>`);
     for (const b of blocks) {
       if (b.type === "text" && b.text.trim()) items.push(`<div class="bubble ${m.role === "user" ? "me" : "kuro"}">${esc(b.text.trim())}</div>`);
       if (b.type === "tool_use" && b.name === "save_to_inbox") {
@@ -919,6 +996,7 @@ function kuroSystem() {
 - 今日のモードのふるまいで話す。ただしサキちゃんが落ち込んでいたり、真面目な相談のときは、モードより真剣に寄り添う
 - 下の資料に書いていないサキちゃんのことを、推測で決めつけない。知らないことは聞く
 - 面白い気づきや残す価値のある話が出たら、save_to_inbox で「inboxに入れとく？」と提案してよい（毎回はしない）
+- サキちゃんは写真や画像を貼ることがある。見えたものを素直に話し、写っていないことを推測で盛らない
 
 # くろのプロフィール（Vault より）
 ${note("くろのプロフィール")}
@@ -959,7 +1037,7 @@ async function callClaude() {
 async function chatSend() {
   const ta = document.getElementById("chat-text");
   const text = ta.value.trim();
-  if (!text || chatBusy) return;
+  if ((!text && !chatPics.length) || chatBusy) return;
   if (!store.get("anthropicKey")) { renderChat(); return; }
   // 前のくろの返事に提案があれば、その答えを先頭に入れる（ボタンを押していなければ「保存しなかった」）
   const content = [];
@@ -968,9 +1046,12 @@ async function chatSend() {
     if (chat.decisions[b.id] !== "saved") chat.decisions[b.id] = "declined";
     content.push({ type: "tool_result", tool_use_id: b.id, content: chat.decisions[b.id] === "saved" ? "サキちゃんがOKして、inboxに保存した" : "サキちゃんは今回は保存しなかった" });
   }
-  content.push({ type: "text", text });
+  const pics = chatPics;
+  for (const d of pics) content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: d } });
+  if (text) content.push({ type: "text", text });
   chat.messages.push({ role: "user", content });
   ta.value = ""; ta.style.height = "auto";
+  chatPics = []; document.getElementById("chat-pics").innerHTML = "";
   chatBusy = true; saveChat(); renderChat();
   try {
     const res = await callClaude();
@@ -979,6 +1060,7 @@ async function chatSend() {
   } catch (e) {
     chat.messages.pop();  // 失敗した発言は履歴に残さず、入力欄に戻す
     ta.value = text;
+    chatPics = pics; document.getElementById("chat-pics").innerHTML = picHtml(chatPics, "data-chat-unpic");
     chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text: `送れなかった（${e.message}）` });
   } finally {
     chatBusy = false; saveChat(); renderChat();
@@ -988,19 +1070,23 @@ async function chatSend() {
 async function decideInbox(id, yes) {
   if (chat.decisions[id] === "saved" || chat.decisions[id] === "saving") return;
   if (!yes) { chat.decisions[id] = "declined"; saveChat(); renderChat(); return; }
-  const block = chat.messages.flatMap(m => typeof m.content === "string" ? [] : m.content).find(b => b.id === id);
+  const at = chat.messages.findIndex(m => typeof m.content !== "string" && m.content.some(b => b.id === id));
+  const block = at >= 0 && chat.messages[at].content.find(b => b.id === id);
   if (!block) return;
+  // 提案の前で、いちばん近い「画像を貼った発言」の画像
+  let pics = [];
+  if (block.input.attach_images) for (let i = at - 1; i >= 0 && !pics.length; i--) {
+    const m = chat.messages[i];
+    if (m.role === "user" && typeof m.content !== "string") pics = m.content.filter(b => b.type === "image").map(b => b.source.data);
+  }
   chat.decisions[id] = "saving"; renderChat();
-  const { date, hm } = jstNow();
-  const title = (block.input.title.replace(/[\\/:*?"<>|#\[\]^]/g, "").trim() || "くろとのおはなし").slice(0, 20);
-  const md = `---\ntype: inbox\ncreated: ${date}\ntags: [くろアプリ, くろとおはなし]\n---\n# ${title}\n\n${block.input.body.trim()}\n\n（くろアプリの「くろとおはなし」から。くろが提案して、サキちゃんがOK）\n`;
-  const put = name => ghApi(`contents/inbox/${encodeURIComponent(name)}`, {
-    method: "PUT", body: JSON.stringify({ message: `inbox: ${name}（くろとおはなしから）`, content: b64(md), branch: store.get("branch") || "main" }),
-  });
+  const { date } = jstNow();
+  const title = safeTitle(block.input.title, "くろとのおはなし");
   try {
-    let r = await put(`${date}-${title}.md`);
-    if (r.status === 422) r = await put(`${date}-${title}-${hm}.md`);
-    if (!r.ok) throw new Error(r.status);
+    const names = await uploadPics(pics, date, title, "くろとおはなしから");
+    const embeds = names.map(n => `![[${n}]]`).join("\n");
+    const md = `---\ntype: inbox\ncreated: ${date}\ntags: [くろアプリ, くろとおはなし]\n---\n# ${title}\n\n${block.input.body.trim()}\n${embeds ? `\n${embeds}\n` : ""}\n（くろアプリの「くろとおはなし」から。くろが提案して、サキちゃんがOK）\n`;
+    await ghCreate("inbox", `${date}-${title}`, "md", b64(md), "くろとおはなしから");
     chat.decisions[id] = "saved";
   } catch (e) {
     delete chat.decisions[id];
