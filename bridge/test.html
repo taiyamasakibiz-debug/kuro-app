@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>くろブリッジ</title>
+<style>
+  :root { --bg: #fbf7f0; --fg: #3b322b; --card: #fff; --line: #e6dccd; --accent: #7a5c45; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #201c19; --fg: #eee5da; --card: #2b2622; --line: #43392f; --accent: #d7b48f; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.7 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  small { opacity: .7; }
+  textarea { box-sizing: border-box; width: 100%; min-height: 96px; margin: 16px 0 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: inherit; font: inherit; }
+  button { padding: 8px 18px; border: 0; border-radius: 999px; background: var(--accent); color: var(--bg); font: inherit; font-weight: 600; }
+  button:disabled { opacity: .5; }
+  #out { white-space: pre-wrap; margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); min-height: 2em; }
+  .meta { margin-top: 6px; font-size: 13px; opacity: .7; }
+</style>
+</head>
+<body>
+<main>
+  <h1>くろブリッジ（実験）</h1>
+  <small>この Mac の Claude Code（<code>claude -p</code>）に聞いてみる</small>
+  <textarea id="q">ひとことで、こんにちはって返して</textarea>
+  <button id="go">聞く</button>
+  <div id="out"></div>
+  <div class="meta" id="meta"></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+$("go").onclick = async () => {
+  $("go").disabled = true; $("out").textContent = "くろが考え中…"; $("meta").textContent = "";
+  try {
+    const r = await fetch("/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: $("q").value }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    $("out").textContent = j.text;
+    $("meta").textContent = `${(j.ms / 1000).toFixed(1)}秒 · ${j.model}`;
+  } catch (e) { $("out").textContent = "うまくいかなかった: " + e.message; }
+  $("go").disabled = false;
+};
+</script>
+</body>
+</html>
