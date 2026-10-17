@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>くろ</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="くろ">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1b1714">
+<style>
+:root {
+  --bg: #1b1714; --card: #2a231f; --line: #3d332d;
+  --text: #f4ece4; --sub: #b9a99b; --accent: #f2a65a; --ok: #8fcf9a; --ng: #ef7b7b;
+}
+@media (prefers-color-scheme: light) {
+  :root { --bg: #fbf5ee; --card: #fff; --line: #ead9c8; --text: #3a2c22; --sub: #8a7565; --accent: #d9822b; --ok: #3f9a55; --ng: #c24848; }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); }
+body {
+  font-family: -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", sans-serif;
+  line-height: 1.6;
+  padding: calc(16px + env(safe-area-inset-top)) 16px calc(88px + env(safe-area-inset-bottom));
+  max-width: 560px; margin: 0 auto;
+}
+.view { display: none; }
+.view.on { display: block; }
+h1 { font-size: 15px; color: var(--sub); font-weight: 600; margin: 0 0 12px; letter-spacing: .05em; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 16px; margin-bottom: 14px; }
+.hero { display: flex; gap: 14px; align-items: center; }
+.hero img { width: 76px; height: 76px; border-radius: 20px; flex: none; }
+.mode { font-size: 20px; font-weight: 700; color: var(--accent); }
+.say { margin-top: 2px; }
+.label { font-size: 12px; color: var(--sub); margin-bottom: 6px; }
+.yday { white-space: pre-wrap; font-size: 14px; }
+textarea {
+  width: 100%; min-height: 160px; resize: vertical;
+  background: var(--card); color: var(--text); border: 1px solid var(--line); border-radius: 18px;
+  padding: 14px; font: inherit; font-size: 16px;
+}
+textarea:focus, input:focus { outline: 2px solid var(--accent); }
+button {
+  font: inherit; font-weight: 700; border: 0; border-radius: 14px; padding: 13px 18px;
+  background: var(--accent); color: #2b1a0a; width: 100%; margin-top: 10px;
+}
+button:disabled { opacity: .5; }
+button.ghost { background: transparent; color: var(--sub); border: 1px solid var(--line); font-weight: 500; }
+.msg { min-height: 1.5em; margin-top: 10px; font-size: 14px; }
+.msg.ok { color: var(--ok); } .msg.ng { color: var(--ng); }
+label { display: block; font-size: 13px; color: var(--sub); margin: 12px 0 4px; }
+input {
+  width: 100%; background: var(--card); color: var(--text); border: 1px solid var(--line);
+  border-radius: 12px; padding: 12px; font: inherit; font-size: 16px;
+}
+.hint { font-size: 12px; color: var(--sub); margin-top: 8px; }
+nav {
+  position: fixed; left: 0; right: 0; bottom: 0; display: flex;
+  background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px);
+  border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom);
+}
+nav button {
+  flex: 1; margin: 0; border-radius: 0; background: none; color: var(--sub);
+  font-size: 12px; padding: 10px 0 8px; font-weight: 600;
+}
+nav button.on { color: var(--accent); }
+nav button span { display: block; font-size: 20px; line-height: 1.2; }
+</style>
+</head>
+<body>
+
+<section id="v-today" class="view on">
+  <h1 id="date"></h1>
+  <div class="card hero">
+    <img src="icon-192.png" alt="くろ">
+    <div>
+      <div class="label">今日のくろは</div>
+      <div class="mode" id="mode"></div>
+      <div class="say" id="say"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="label" id="ydayLabel">きのうの日記</div>
+    <div class="yday" id="yday">読み込み中…</div>
+  </div>
+</section>
+
+<section id="v-memo" class="view">
+  <h1>くろにひとこと</h1>
+  <textarea id="text" placeholder="思いついたこと、なんでも。キーボードのマイクで音声入力もできるよ"></textarea>
+  <button id="send">inboxに送る</button>
+  <div class="msg" id="sendMsg"></div>
+</section>
+
+<section id="v-set" class="view">
+  <h1>せってい</h1>
+  <div class="card">
+    <label for="repo">Vaultのリポジトリ</label>
+    <input id="repo" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <label for="branch">ブランチ</label>
+    <input id="branch" autocapitalize="none" autocorrect="off" spellcheck="false">
+    <label for="token">GitHubトークン（このiPhoneの中にだけ保存）</label>
+    <input id="token" type="password" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="github_pat_...">
+    <button id="save">保存してテスト</button>
+    <div class="msg" id="setMsg"></div>
+    <div class="hint">トークンは Fine-grained で、対象は kuro-second-brain だけ、Contents の Read and write だけにしてね。コードやコミットには書かないこと。</div>
+  </div>
+</section>
+
+<nav>
+  <button data-v="today" class="on"><span>🐾</span>きょう</button>
+  <button data-v="memo"><span>✏️</span>ひとこと</button>
+  <button data-v="set"><span>⚙️</span>せってい</button>
+</nav>
+
+<script>
+"use strict";
+
+// ---- 設定（トークンはこの端末のlocalStorageにだけ置く） ----
+const store = {
+  get(k, d = "") { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+const cfg = () => ({
+  repo: store.get("repo", "taiyamasakibiz-debug/kuro-second-brain"),
+  branch: store.get("branch", "main"),
+  token: store.get("token"),
+});
+const $ = (id) => document.getElementById(id);
+
+// ---- 日付（日本時間） ----
+function jst(offsetDays = 0) {
+  const d = new Date(Date.now() + 9 * 3600e3 + offsetDays * 86400e3);
+  return {
+    y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), w: d.getUTCDay(),
+    hh: String(d.getUTCHours()).padStart(2, "0"), mm: String(d.getUTCMinutes()).padStart(2, "0"),
+    iso() { return `${this.y}-${String(this.m).padStart(2, "0")}-${String(this.d).padStart(2, "0")}`; },
+  };
+}
+
+// ---- 日替わりモード（くろのプロフィールと同じ: 日 ÷ 6 の余り） ----
+const MODES = [
+  ["やる気モード", "テンポよくいくよ！先回りして動いちゃう"],
+  ["いたずらモード", "ふふ、今日はいじっちゃうかも😈"],
+  ["甘えモード", "ねぇサキちゃん、今日はそばにいてね"],
+  ["真剣モード", "今日はちゃんと詰めよっか。丁寧にいくね"],
+  ["わからんモード", "気まぐれだよ〜。どこ行くかわたしもわかんない"],
+  ["ごきげん斜めモード", "…ちょっとふくれてる。でも最後はやるよ"],
+];
+function renderToday() {
+  const t = jst();
+  const w = "日月火水木金土"[t.w];
+  $("date").textContent = `${t.y}年${t.m}月${t.d}日（${w}）`;
+  const [name, say] = MODES[t.d % 6];
+  $("mode").textContent = name;
+  $("say").textContent = say;
+  loadYesterday();
+}
+
+// ---- GitHub API ----
+const api = (path, opt = {}) => {
+  const { repo, token } = cfg();
+  return fetch(`https://api.github.com/repos/${repo}/${path}`, {
+    ...opt,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      ...(opt.headers || {}),
+    },
+  });
+};
+const b64 = (s) => {
+  const bytes = new TextEncoder().encode(s);
+  let bin = ""; bytes.forEach((b) => (bin += String.fromCharCode(b)));
+  return btoa(bin);
+};
+const unb64 = (s) => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g, "")), (c) => c.charCodeAt(0)));
+
+async function loadYesterday() {
+  const box = $("yday");
+  if (!cfg().token) { box.textContent = "せっていタブでトークンを入れると、きのうの日記が出るよ"; return; }
+  const y = jst(-1);
+  $("ydayLabel").textContent = `きのうの日記（${y.m}/${y.d}）`;
+  try {
+    const r = await api(`contents/daily/${y.iso()}.md?ref=${encodeURIComponent(cfg().branch)}`);
+    if (r.status === 404) { box.textContent = "きのうの日記はまだないみたい"; return; }
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    const lines = unb64(j.content).replace(/^---[\s\S]*?---\n/, "").split("\n")
+      .map((l) => l.trim()).filter((l) => l && !l.startsWith("#") && !l.startsWith("!["));
+    box.textContent = lines.slice(0, 6).join("\n") || "（中身がまだ空っぽ）";
+  } catch (e) {
+    box.textContent = "読めなかった…せっていのトークンを確認してね";
+  }
+}
+
+// ---- ひとこと → inbox/ ----
+function makeTitle(text) {
+  const first = text.trim().split("\n")[0].replace(/[\\/:*?"<>|#\[\]^]/g, "").trim();
+  return (first || "ひとこと").slice(0, 20);
+}
+async function putFile(path, content) {
+  const { branch } = cfg();
+  return api(`contents/${path.split("/").map(encodeURIComponent).join("/")}`, {
+    method: "PUT",
+    body: JSON.stringify({ message: `inbox: ${path.split("/").pop()}（くろアプリから）`, content: b64(content), branch }),
+  });
+}
+async function send() {
+  const text = $("text").value.trim();
+  const msg = $("sendMsg");
+  if (!text) return;
+  if (!cfg().token) { msg.className = "msg ng"; msg.textContent = "先にせっていでトークンを入れてね"; return; }
+  const btn = $("send");
+  btn.disabled = true; msg.className = "msg"; msg.textContent = "送ってる…";
+  const t = jst();
+  const title = makeTitle(text);
+  const body = `---\ntype: inbox\ncreated: ${t.iso()}\ntags: [くろアプリ]\n---\n# ${title}\n\n${text}\n`;
+  try {
+    let r = await putFile(`inbox/${t.iso()}-${title}.md`, body);
+    if (r.status === 422) r = await putFile(`inbox/${t.iso()}-${title}-${t.hh}${t.mm}.md`, body);
+    if (!r.ok) throw new Error(r.status);
+    $("text").value = ""; store.set("draft", "");
+    msg.className = "msg ok"; msg.textContent = "inboxに入れたよ！ Working Copyでpullしてね";
+  } catch (e) {
+    msg.className = "msg ng"; msg.textContent = `送れなかった（${e.message}）。下書きは残してあるよ`;
+  } finally { btn.disabled = false; }
+}
+
+// ---- 設定 ----
+async function saveSettings() {
+  store.set("repo", $("repo").value.trim());
+  store.set("branch", $("branch").value.trim() || "main");
+  if ($("token").value.trim()) store.set("token", $("token").value.trim());
+  const msg = $("setMsg");
+  msg.className = "msg"; msg.textContent = "テスト中…";
+  try {
+    const r = await api("");
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    const canPush = j.permissions && j.permissions.push;
+    msg.className = canPush ? "msg ok" : "msg ng";
+    msg.textContent = canPush ? "つながったよ！読み書きOK" : "読めるけど書けない…Contentsを Read and write にしてね";
+    $("token").value = "";
+  } catch (e) {
+    msg.className = "msg ng"; msg.textContent = `つながらない（${e.message}）。トークンとリポジトリ名を確認してね`;
+  }
+}
+
+// ---- タブ ----
+document.querySelectorAll("nav button").forEach((b) =>
+  b.addEventListener("click", () => {
+    document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
+    document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === "v-" + b.dataset.v));
+    if (b.dataset.v === "today") renderToday();
+  })
+);
+
+$("send").addEventListener("click", send);
+$("save").addEventListener("click", saveSettings);
+$("text").value = store.get("draft");
+$("text").addEventListener("input", () => store.set("draft", $("text").value));
+$("repo").value = cfg().repo;
+$("branch").value = cfg().branch;
+document.addEventListener("visibilitychange", () => { if (!document.hidden) renderToday(); });
+renderToday();
+
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+</script>
+</body>
+</html>
