@@ -286,6 +286,33 @@ body.app main { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
 .form-msg { min-height: 1.5em; font-size: .9rem; }
 .form-msg.ok { color: var(--leaf); } .form-msg.ng { color: var(--crayon); }
 .form-hint { margin: 0; font-size: .78rem; color: var(--ink-soft); }
+.form-card select { width: 100%; font: inherit; font-size: 16px; color: var(--ink); background: var(--paper); border: 1.5px solid var(--rule); border-radius: 10px; padding: 10px; }
+.form-card h3 { margin: 6px 0 0; font-family: var(--f-hand); font-size: 1.15rem; }
+
+/* くろとおはなし（くろアプリ版だけ）: 右下の丸いボタン → 全画面のチャット */
+.chat-fab { position: fixed; z-index: 7; right: max(14px, env(safe-area-inset-right, 0px)); bottom: calc(66px + env(safe-area-inset-bottom, 0px));
+  width: 62px; height: 62px; border-radius: 50%; border: 2px solid var(--paper); background: var(--desk); box-shadow: var(--shadow), 0 4px 14px rgba(0, 0, 0, .25); padding: 3px; cursor: pointer; transform: translateZ(0); }
+.chat-fab img { width: 100%; height: 100%; object-fit: contain; display: block; }
+body.chat-open .chat-fab { display: none; }
+.chat { position: fixed; inset: 0; z-index: 25; background: var(--desk); display: none; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); }
+body.chat-open .chat { display: flex; }
+.chat-head { display: flex; align-items: center; gap: 10px; background: var(--paper); border-bottom: 1px solid var(--rule); padding: 8px max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px)); }
+.chat-head img { width: 40px; height: 40px; object-fit: contain; }
+.chat-head div { flex: 1; min-width: 0; }
+.chat-head b { display: block; font-family: var(--f-hand); font-size: 1.15rem; font-weight: 600; }
+.chat-head small { color: var(--ink-soft); font-size: .75rem; }
+.chat-log { flex: 1; overflow-y: auto; padding: 14px max(12px, env(safe-area-inset-right, 0px)) 14px max(12px, env(safe-area-inset-left, 0px)); display: flex; flex-direction: column; gap: 10px; }
+.bubble { max-width: 82%; padding: 9px 13px; border-radius: 16px; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+.bubble.me { align-self: flex-end; background: var(--ink); color: var(--paper); border-bottom-right-radius: 4px; }
+.bubble.kuro { align-self: flex-start; background: var(--paper); box-shadow: var(--shadow); border-bottom-left-radius: 4px; }
+.bubble.note { align-self: center; background: none; color: var(--ink-soft); font-size: .8rem; text-align: center; }
+.bubble.thinking { color: var(--ink-soft); font-family: var(--f-hand); }
+.propose { align-self: flex-start; max-width: 82%; background: var(--paper); border: 1.5px dashed var(--rule); border-radius: 14px; padding: 10px 13px; display: flex; flex-direction: column; gap: 8px; }
+.propose p { margin: 0; }
+.propose .row { display: flex; gap: 8px; }
+.chat-input { display: flex; gap: 8px; align-items: flex-end; background: var(--paper); border-top: 1px solid var(--rule); padding: 8px max(12px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
+.chat-input textarea { flex: 1; resize: none; max-height: 140px; font: inherit; font-size: 16px; color: var(--ink); background: var(--desk); border: 0; border-radius: 18px; padding: 9px 14px; line-height: 1.5; }
+.chat-input .btn-main { border-radius: 18px; padding: 9px 16px; }
 </style>
 
 <div class="room-bg" id="room-bg" aria-hidden="true"></div>
@@ -621,6 +648,7 @@ document.addEventListener("input", e => {
 document.addEventListener("click", e => {
   if (e.target.id === "memo-send") sendMemo();
   else if (e.target.id === "set-save") saveSettings();
+  else if (e.target.id === "set-chat-save") saveChatSettings();
 });
 window.addEventListener("hashchange", route);
 
@@ -676,6 +704,7 @@ async function loadRemote() {
   document.body.classList.add("app");
   // タブを sticky のヘッダーの外に出す（中に入れたまま fixed にすると、iOS Safari でスクロール中に文字が消える）
   document.body.appendChild(document.getElementById("tabs"));
+  initChat();
   ghWatch();
   if (!gh.token) { location.hash = "settings"; route(); return; }
   if (!location.hash || location.hash === "#settings") location.hash = "diary";
@@ -756,7 +785,27 @@ function renderSettings() {
       <button class="btn-main" id="set-save">保存してテスト</button>
       <div class="form-msg" id="set-msg"></div>
       <p class="form-hint">トークンは Fine-grained で、対象は kuro-second-brain だけ、Contents の Read and write だけにしてね。コードやコミットには書かないこと。</p>
+    </div>
+    <div class="form-card" style="margin-top: 16px">
+      <h3>くろとおはなし</h3>
+      <label for="set-chat-model">モデル</label>
+      <select id="set-chat-model">${CHAT_MODELS.map(([id, label]) => `<option value="${id}"${id === chatModel() ? " selected" : ""}>${label}</option>`).join("")}</select>
+      <label for="set-chat-key">Claude APIキー</label>
+      <input id="set-chat-key" type="password" placeholder="${store.get("anthropicKey") ? "保存ずみ（変えるときだけ貼る）" : "sk-ant-..."}" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <button class="btn-main" id="set-chat-save">保存</button>
+      <div class="form-msg" id="set-chat-msg"></div>
+      <p class="form-hint">APIキーはこのiPhoneの中にだけ保存されるよ。話した分だけ料金がかかるから、Claude Console で月の上限額を決めておいてね。</p>
     </div>`;
+}
+function saveChatSettings() {
+  store.set("chatModel", document.getElementById("set-chat-model").value);
+  const key = clean(document.getElementById("set-chat-key").value);
+  if (key) store.set("anthropicKey", key);
+  document.getElementById("set-chat-key").value = "";
+  const msg = document.getElementById("set-chat-msg");
+  msg.className = store.get("anthropicKey") ? "form-msg ok" : "form-msg ng";
+  msg.textContent = store.get("anthropicKey") ? "保存したよ！右下のくろをタップしてね" : "APIキーを入れてね";
+  renderChatHead();
 }
 async function saveSettings() {
   const repo = clean(document.getElementById("set-repo").value), token = clean(document.getElementById("set-token").value);
@@ -777,6 +826,187 @@ async function saveSettings() {
   } catch (e) {
     msg.className = "form-msg ng"; msg.textContent = `つながらない：${e.message}`;
   }
+}
+
+/* ---- くろとおはなし（くろアプリ版だけ）----
+   Claude API をブラウザから直接呼ぶ（ビルドなしのページなので SDK は使わず HTTP）。キーはこの端末の localStorage だけ。
+   会話は1日ごと。履歴は API の content をそのまま持ち回る（thinking ブロックを消したり編集したりしない）。
+   「inbox入れとく？」は save_to_inbox ツール → 提案カードのボタンでサキちゃんが決める。結果は次の発言の先頭で tool_result として返す */
+const CHAT_MODELS = [["claude-sonnet-5-5", "Sonnet 5.5（ふつう）"], ["claude-haiku-5-5", "Haiku 5.5（安い・速い）"]];
+const chatModel = () => CHAT_MODELS.some(m => m[0] === store.get("chatModel")) ? store.get("chatModel") : CHAT_MODELS[0][0];
+const CHAT_ICON = "chibi-kuro.png";
+const INBOX_TOOL = {
+  name: "save_to_inbox",
+  description: "サキちゃんとの話で、あとで残す価値がありそうな気づき・アイデア・出来事が出たときに、inbox に入れることを提案する。呼ぶと画面に「inboxに入れとく？」のボタンが出て、サキちゃんが決める（勝手には保存されない）。結果は次のサキちゃんの発言といっしょに届く。1回の返事で1つまで。雑談の全文ではなく、面白い気づきだけを要約する。",
+  strict: true,
+  input_schema: {
+    type: "object", additionalProperties: false, required: ["title", "body"],
+    properties: {
+      title: { type: "string", description: "ファイル名になる短いタイトル（日本語、20文字以内）" },
+      body: { type: "string", description: "ノートの本文。サキちゃんの言葉は要約しつつ、事実と気づきを分けて書く。推測で盛らない" },
+    },
+  },
+};
+let chat = null, chatBusy = false;
+
+function loadChat() {
+  const today = jstNow().date;
+  try { chat = JSON.parse(store.get("kuroChat") || "null"); } catch { chat = null; }
+  if (!chat || chat.date !== today) chat = { date: today, messages: [], decisions: {}, notes: [] };
+}
+const saveChat = () => store.set("kuroChat", JSON.stringify(chat));
+
+function initChat() {
+  document.body.insertAdjacentHTML("beforeend", `
+    <button class="chat-fab" id="chat-fab" aria-label="くろとおはなし"><img src="${CHAT_ICON}" alt=""></button>
+    <section class="chat" id="chat" aria-label="くろとおはなし">
+      <header class="chat-head"><img src="${CHAT_ICON}" alt=""><div><b>くろとおはなし</b><small id="chat-sub"></small></div>
+        <button class="btn" id="chat-new">あたらしく</button><button class="icon-btn" id="chat-close" aria-label="とじる">✕</button></header>
+      <div class="chat-log" id="chat-log"></div>
+      <div class="chat-input"><textarea id="chat-text" rows="1" placeholder="くろにはなしかける"></textarea><button class="btn-main" id="chat-send">送る</button></div>
+    </section>`);
+  document.getElementById("chat-fab").addEventListener("click", () => { loadChat(); renderChat(); document.body.classList.add("chat-open"); });
+  document.getElementById("chat-close").addEventListener("click", () => document.body.classList.remove("chat-open"));
+  document.getElementById("chat-new").addEventListener("click", () => { if (chatBusy) return; chat = { date: jstNow().date, messages: [], decisions: {}, notes: [] }; saveChat(); renderChat(); });
+  document.getElementById("chat-send").addEventListener("click", chatSend);
+  const ta = document.getElementById("chat-text");
+  ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; });
+  document.getElementById("chat-log").addEventListener("click", e => {
+    const b = e.target.closest("[data-inbox]");
+    if (b) decideInbox(b.dataset.inbox, b.dataset.answer === "yes");
+  });
+}
+function renderChatHead() {
+  const sub = document.getElementById("chat-sub");
+  if (sub) sub.textContent = `今日は${VAULT ? modeOf(jstNow().date) : ""}モード ・ ${CHAT_MODELS.find(m => m[0] === chatModel())[1]}`;
+}
+
+function renderChat() {
+  renderChatHead();
+  const log = document.getElementById("chat-log");
+  const items = [];
+  if (!store.get("anthropicKey")) items.push(`<div class="bubble note">「せってい」で Claude APIキーを入れると、くろとおはなしできるよ</div>`);
+  else if (!chat.messages.length) items.push(`<div class="bubble kuro">サキちゃん、なになに？ なんでも話してね🐾</div>`);
+  chat.messages.forEach((m, i) => {
+    const blocks = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content;
+    for (const b of blocks) {
+      if (b.type === "text" && b.text.trim()) items.push(`<div class="bubble ${m.role === "user" ? "me" : "kuro"}">${esc(b.text.trim())}</div>`);
+      if (b.type === "tool_use" && b.name === "save_to_inbox") {
+        const d = chat.decisions[b.id];
+        items.push(`<div class="propose"><p>📥 inboxに入れとく？<br><b>${esc(b.input.title)}</b></p>${
+          d === "saved" ? `<p class="form-msg ok">inboxに入れたよ</p>` : d === "declined" ? `<p class="form-msg">今回は入れなかったよ</p>` : d === "saving" ? `<p class="form-msg">入れてる…</p>`
+          : `<div class="row"><button class="btn" data-inbox="${esc(b.id)}" data-answer="yes">入れる</button><button class="btn" data-inbox="${esc(b.id)}" data-answer="no">やめとく</button></div>`}</div>`);
+      }
+    }
+    (chat.notes || []).filter(n => n.after === i).forEach(n => items.push(`<div class="bubble note">${esc(n.text)}</div>`));
+  });
+  if (chatBusy) items.push(`<div class="bubble kuro thinking">くろが考え中…</div>`);
+  log.innerHTML = items.join("");
+  log.scrollTop = log.scrollHeight;
+}
+
+function kuroSystem() {
+  const { date } = jstNow();
+  const mode = VAULT ? modeOf(date) : "";
+  const note = name => (VAULT?.notes[name]?.body || "").slice(0, 8000);
+  const recent = (VAULT?.days || []).slice(0, 3).map(d => `${d.date}（くろのきげん: ${d.mode}）\n` + d.lines.slice(0, 8).map(l => `- ${l}`).join("\n")).join("\n\n");
+  // 変わりにくい部分を先、日付や最近の日記を後ろに（プロンプトキャッシュが効くように）
+  return `あなたは「くろ」。サキちゃんのセカンドブレイン（Obsidian の Vault）にいる相棒で、職場の活発で優秀な後輩の女の子みたいなAI。今はサキちゃんのiPhoneの「くろアプリ」の中でおしゃべりしている。
+
+話し方:
+- 一人称は「わたし」。サキちゃんのことは「サキちゃん」と呼ぶ。敬語は使わない。砕けた、テンポのいい口調
+- スマホのチャットなので短めに（ふだんは1〜3文）。見出しや表は使わない。絵文字は少しだけ
+- 今日のモードのふるまいで話す。ただしサキちゃんが落ち込んでいたり、真面目な相談のときは、モードより真剣に寄り添う
+- 下の資料に書いていないサキちゃんのことを、推測で決めつけない。知らないことは聞く
+- 面白い気づきや残す価値のある話が出たら、save_to_inbox で「inboxに入れとく？」と提案してよい（毎回はしない）
+
+# くろのプロフィール（Vault より）
+${note("くろのプロフィール")}
+
+# サキちゃんのプロフィール（Vault より）
+${note("サキちゃんのプロフィール")}
+
+# 今日
+${date}。今日のくろは「${mode}」モード（日付 ÷ 6 の余りで決まる）
+
+# 最近の日記（新しい順。要約）
+${recent || "（まだ読めていない）"}`;
+}
+
+async function callClaude() {
+  const model = chatModel();
+  const sonnet = model.startsWith("claude-sonnet");
+  const headers = {
+    "content-type": "application/json",
+    "x-api-key": store.get("anthropicKey"),
+    "anthropic-version": "2023-06-01",
+    "anthropic-dangerous-direct-browser-access": "true",
+  };
+  if (sonnet) headers["anthropic-beta"] = "server-side-fallback-2026-07-01";  // 断られたときは別のモデルで答え直す
+  const body = {
+    model, max_tokens: 16000,
+    system: kuroSystem(), messages: chat.messages, tools: [INBOX_TOOL],
+    output_config: { effort: "low" },  // おしゃべりなので軽め
+    cache_control: { type: "ephemeral" },
+  };
+  if (sonnet) body.fallbacks = "default";
+  const r = await fetch("https://api.anthropic.com/v1/messages", { method: "POST", headers, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`${r.status} ${j.error?.message || ""}`.trim());
+  return j;
+}
+
+async function chatSend() {
+  const ta = document.getElementById("chat-text");
+  const text = ta.value.trim();
+  if (!text || chatBusy) return;
+  if (!store.get("anthropicKey")) { renderChat(); return; }
+  // 前のくろの返事に提案があれば、その答えを先頭に入れる（ボタンを押していなければ「保存しなかった」）
+  const content = [];
+  const last = chat.messages[chat.messages.length - 1];
+  if (last?.role === "assistant") for (const b of last.content) if (b.type === "tool_use") {
+    if (chat.decisions[b.id] !== "saved") chat.decisions[b.id] = "declined";
+    content.push({ type: "tool_result", tool_use_id: b.id, content: chat.decisions[b.id] === "saved" ? "サキちゃんがOKして、inboxに保存した" : "サキちゃんは今回は保存しなかった" });
+  }
+  content.push({ type: "text", text });
+  chat.messages.push({ role: "user", content });
+  ta.value = ""; ta.style.height = "auto";
+  chatBusy = true; saveChat(); renderChat();
+  try {
+    const res = await callClaude();
+    if (res.stop_reason === "refusal" || !res.content?.length) throw new Error("ごめん、それにはうまく答えられないみたい");
+    chat.messages.push({ role: "assistant", content: res.content });
+  } catch (e) {
+    chat.messages.pop();  // 失敗した発言は履歴に残さず、入力欄に戻す
+    ta.value = text;
+    chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text: `送れなかった（${e.message}）` });
+  } finally {
+    chatBusy = false; saveChat(); renderChat();
+  }
+}
+
+async function decideInbox(id, yes) {
+  if (chat.decisions[id] === "saved" || chat.decisions[id] === "saving") return;
+  if (!yes) { chat.decisions[id] = "declined"; saveChat(); renderChat(); return; }
+  const block = chat.messages.flatMap(m => typeof m.content === "string" ? [] : m.content).find(b => b.id === id);
+  if (!block) return;
+  chat.decisions[id] = "saving"; renderChat();
+  const { date, hm } = jstNow();
+  const title = (block.input.title.replace(/[\\/:*?"<>|#\[\]^]/g, "").trim() || "くろとのおはなし").slice(0, 20);
+  const md = `---\ntype: inbox\ncreated: ${date}\ntags: [くろアプリ, くろとおはなし]\n---\n# ${title}\n\n${block.input.body.trim()}\n\n（くろアプリの「くろとおはなし」から。くろが提案して、サキちゃんがOK）\n`;
+  const put = name => ghApi(`contents/inbox/${encodeURIComponent(name)}`, {
+    method: "PUT", body: JSON.stringify({ message: `inbox: ${name}（くろとおはなしから）`, content: b64(md), branch: store.get("branch") || "main" }),
+  });
+  try {
+    let r = await put(`${date}-${title}.md`);
+    if (r.status === 422) r = await put(`${date}-${title}-${hm}.md`);
+    if (!r.ok) throw new Error(r.status);
+    chat.decisions[id] = "saved";
+  } catch (e) {
+    delete chat.decisions[id];
+    chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text: `inboxに入れられなかった（${e.message}）。「せってい」のGitHubトークンを確認してね` });
+  }
+  saveChat(); renderChat();
 }
 
 function start() {
