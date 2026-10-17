@@ -11,6 +11,7 @@
   main { max-width: 640px; margin: 0 auto; padding: 24px 16px; }
   h1 { font-size: 20px; margin: 0 0 4px; }
   small { opacity: .7; }
+  #code { box-sizing: border-box; width: 10em; margin-top: 16px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: inherit; font: inherit; letter-spacing: .2em; }
   textarea { box-sizing: border-box; width: 100%; min-height: 96px; margin: 16px 0 8px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: inherit; font: inherit; }
   button { padding: 8px 18px; border: 0; border-radius: 999px; background: var(--accent); color: var(--bg); font: inherit; font-weight: 600; }
   button:disabled { opacity: .5; }
@@ -22,6 +23,7 @@
 <main>
   <h1>くろブリッジ（実験）</h1>
   <small>この Mac の Claude Code（<code>claude -p</code>）に聞いてみる</small>
+  <input id="code" inputmode="numeric" maxlength="6" placeholder="合言葉（6けた）">
   <textarea id="q">ひとことで、こんにちはって返して</textarea>
   <button id="go">聞く</button>
   <div id="out"></div>
@@ -29,12 +31,14 @@
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
+try { $("code").value = localStorage.getItem("bridgeCode") || ""; } catch {}
 $("go").onclick = async () => {
   $("go").disabled = true; $("out").textContent = "くろが考え中…"; $("meta").textContent = "";
   try {
-    const r = await fetch("/ask", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ prompt: $("q").value }) });
+    const r = await fetch("/ask", { method: "POST", headers: { "content-type": "application/json", "x-kuro-code": $("code").value.trim() }, body: JSON.stringify({ prompt: $("q").value }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error);
+    try { localStorage.setItem("bridgeCode", $("code").value.trim()); } catch {}
     $("out").textContent = j.text;
     $("meta").textContent = `${(j.ms / 1000).toFixed(1)}秒 · ${j.model}`;
   } catch (e) { $("out").textContent = "うまくいかなかった: " + e.message; }

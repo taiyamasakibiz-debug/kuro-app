@@ -1,19 +1,24 @@
 // くろブリッジ（実験）: Mac の Claude Code CLI（`claude -p`）をアプリから呼ぶための中継サーバー。
 // ブラウザのページは CLI を起動できないので、このサーバーが代わりに起動して答えを返す。
-// - 依存なし（Node 18+）。`node bridge/server.mjs` で起動 → http://127.0.0.1:8787/
-// - 127.0.0.1 だけで待つ（同じ Mac からしか届かない）。iPhone から使うのは次の段階
+// - 依存なし（Node 18+）。`node bridge/server.mjs` で起動 → http://127.0.0.1:8787/（この Mac だけ）
+// - `HOST=0.0.0.0 node bridge/server.mjs` で同じ Wi-Fi の iPhone からも届く
+// - 起動のたびに6けたの合言葉を作って画面に出す。合言葉がないと聞けない。5回まちがえたら止まる
 // - CLI は改造せずそのまま起動。ログインは Mac の Claude Code のもの（コードにキーは書かない）
 // - ツールは全部オフ（--tools ""）。くろはファイルを読んだり書いたりできない、話すだけ
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { randomInt } from "node:crypto";
+import { networkInterfaces } from "node:os";
 
-const HOST = "127.0.0.1";
+const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8787);
 const CLAUDE = process.env.CLAUDE_BIN || "claude";
 const TIMEOUT_MS = 120_000;
 const page = new URL("./test.html", import.meta.url);
 
+const CODE = String(randomInt(0, 1_000_000)).padStart(6, "0");
+let misses = 0;
 let busy = false;  // 同時に動かすのは1本だけ
 
 function askClaude(prompt) {
@@ -49,7 +54,9 @@ createServer(async (req, res) => {
   if (req.method !== "POST" || req.url !== "/ask") return send(res, 404, { error: "not found" });
   // 別のサイトのページから勝手に呼ばれないように、同じ出どころだけ受ける
   const origin = req.headers.origin;
-  if (origin && origin !== `http://${HOST}:${PORT}` && origin !== `http://localhost:${PORT}`) return send(res, 403, { error: "origin" });
+  if (origin && origin !== `http://${req.headers.host}`) return send(res, 403, { error: "origin" });
+  if (misses >= 5) return send(res, 403, { error: "合言葉を5回まちがえたので止めた。サーバーを起動し直してね" });
+  if (req.headers["x-kuro-code"] !== CODE) { misses++; return send(res, 401, { error: "合言葉がちがう" }); }
   if (busy) return send(res, 429, { error: "くろは今べつの返事を考え中" });
 
   let raw = "";
@@ -62,4 +69,8 @@ createServer(async (req, res) => {
   try { send(res, 200, await askClaude(prompt)); }
   catch (e) { send(res, 500, { error: e.message }); }
   finally { busy = false; }
-}).listen(PORT, HOST, () => console.log(`くろブリッジ: http://${HOST}:${PORT}/`));
+}).listen(PORT, HOST, () => {
+  const lan = Object.values(networkInterfaces()).flat().find((a) => a.family === "IPv4" && !a.internal)?.address;
+  console.log(`くろブリッジ: http://${HOST === "0.0.0.0" && lan ? lan : HOST}:${PORT}/`);
+  console.log(`合言葉: ${CODE}`);
+});
