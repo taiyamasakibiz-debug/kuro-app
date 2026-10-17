@@ -67,7 +67,8 @@
 }
 
 * { box-sizing: border-box; }
-body { background: var(--desk); color: var(--ink); font-family: var(--f-ui); font-size: 15px; line-height: 1.7; }
+/* margin: 0 と上の余白は、くろアプリ版（ホーム画面のWebアプリ）で必要。ステータスバーの分だけ下げて、sticky のメニューとずれないようにする */
+body { margin: 0; padding-top: env(safe-area-inset-top, 0px); background: var(--desk); color: var(--ink); font-family: var(--f-ui); font-size: 15px; line-height: 1.7; }
 body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--paper); }
 /* ふたりの部屋（背景）。iOS は background-attachment: fixed が効かないので固定の板を敷く */
 .room-bg { position: fixed; inset: 0; z-index: 0; background: var(--desk) center 35% / cover no-repeat; }
