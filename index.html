@@ -297,6 +297,8 @@ body.chat-open .chat-fab { display: none; }
 .chat { position: fixed; inset: 0; z-index: 25; background: var(--desk); display: none; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); }
 body.chat-open .chat { display: flex; }
 body.chat-open { overflow: hidden; }  /* チャット中は裏の日記をスクロールさせない */
+/* iOS のキーボードは半透明なので、チャット中は裏の日記を隠す（キーボード越しに透けないように） */
+body.chat-open > :not(.chat):not(script) { visibility: hidden; }
 .chat.kb .chat-input { padding-bottom: 8px; }  /* キーボードが出ているときは、ホームバーの余白はいらない */
 .chat-head { display: flex; align-items: center; gap: 10px; background: var(--paper); border-bottom: 1px solid var(--rule); padding: 8px max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px)); }
 .chat-head img { width: 40px; height: 40px; object-fit: contain; }
@@ -939,7 +941,10 @@ function initChat() {
   window.visualViewport?.addEventListener("scroll", fitChat);
   document.getElementById("chat-close").addEventListener("click", () => document.body.classList.remove("chat-open"));
   document.getElementById("chat-new").addEventListener("click", () => { if (chatBusy) return; chat = { date: jstNow().date, messages: [], decisions: {}, notes: [] }; saveChat(); renderChat(); });
-  document.getElementById("chat-send").addEventListener("click", chatSend);
+  // 「送る」は指が触れた時点で送る。click を待つと、その間にキーボードが閉じて画面の大きさが変わり、押したことにならない
+  const send = document.getElementById("chat-send");
+  send.addEventListener("touchend", e => { e.preventDefault(); chatSend(); });  // preventDefault でキーボードも開いたまま
+  send.addEventListener("click", chatSend);  // マウス・キーボード操作のとき
   const ta = document.getElementById("chat-text");
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; });
   const showChatPics = () => { document.getElementById("chat-pics").innerHTML = picHtml(chatPics, "data-chat-unpic"); };
