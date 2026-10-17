@@ -113,6 +113,7 @@ nav button span { display: block; font-size: 20px; line-height: 1.2; }
 <nav>
   <button data-v="today" class="on"><span>🐾</span>きょう</button>
   <button data-v="memo"><span>✏️</span>ひとこと</button>
+  <button data-href="diary.html"><span>📔</span>えにっき</button>
   <button data-v="set"><span>⚙️</span>せってい</button>
 </nav>
 
@@ -259,7 +260,8 @@ async function saveSettings() {
 // ---- タブ ----
 document.querySelectorAll("nav button").forEach((b) =>
   b.addEventListener("click", () => {
-    document.querySelectorAll("nav button").forEach((x) => x.classList.toggle("on", x === b));
+    if (b.dataset.href) { location.href = b.dataset.href; return; }
+    document.querySelectorAll("nav button[data-v]").forEach((x) => x.classList.toggle("on", x === b));
     document.querySelectorAll(".view").forEach((v) => v.classList.toggle("on", v.id === "v-" + b.dataset.v));
     if (b.dataset.v === "today") renderToday();
   })
