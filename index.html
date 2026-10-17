@@ -296,6 +296,8 @@ body.app main { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
 body.chat-open .chat-fab { display: none; }
 .chat { position: fixed; inset: 0; z-index: 25; background: var(--desk); display: none; flex-direction: column; padding-top: env(safe-area-inset-top, 0px); }
 body.chat-open .chat { display: flex; }
+body.chat-open { overflow: hidden; }  /* チャット中は裏の日記をスクロールさせない */
+.chat.kb .chat-input { padding-bottom: 8px; }  /* キーボードが出ているときは、ホームバーの余白はいらない */
 .chat-head { display: flex; align-items: center; gap: 10px; background: var(--paper); border-bottom: 1px solid var(--rule); padding: 8px max(12px, env(safe-area-inset-right, 0px)) 8px max(12px, env(safe-area-inset-left, 0px)); }
 .chat-head img { width: 40px; height: 40px; object-fit: contain; }
 .chat-head div { flex: 1; min-width: 0; }
@@ -931,7 +933,10 @@ function initChat() {
       <div class="pics chat-pics" id="chat-pics"></div>
       <div class="chat-input"><label class="pic-btn" aria-label="画像をつける">📷<input type="file" id="chat-file" accept="image/*" multiple></label><textarea id="chat-text" rows="1" placeholder="くろにはなしかける"></textarea><button class="btn-main" id="chat-send">送る</button></div>
     </section>`);
-  document.getElementById("chat-fab").addEventListener("click", () => { loadChat(); renderChat(); document.body.classList.add("chat-open"); });
+  document.getElementById("chat-fab").addEventListener("click", () => { loadChat(); renderChat(); document.body.classList.add("chat-open"); fitChat(); });
+  // iPhone はキーボードを出すと画面ごとずらすので、チャットを「今見えている範囲」にぴったり合わせる（裏の日記がのぞかないように）
+  window.visualViewport?.addEventListener("resize", fitChat);
+  window.visualViewport?.addEventListener("scroll", fitChat);
   document.getElementById("chat-close").addEventListener("click", () => document.body.classList.remove("chat-open"));
   document.getElementById("chat-new").addEventListener("click", () => { if (chatBusy) return; chat = { date: jstNow().date, messages: [], decisions: {}, notes: [] }; saveChat(); renderChat(); });
   document.getElementById("chat-send").addEventListener("click", chatSend);
@@ -950,6 +955,16 @@ function initChat() {
     const b = e.target.closest("[data-inbox]");
     if (b) decideInbox(b.dataset.inbox, b.dataset.answer === "yes");
   });
+}
+function fitChat() {
+  const el = document.getElementById("chat"), vv = window.visualViewport;
+  if (!el || !vv || !document.body.classList.contains("chat-open")) return;
+  el.style.top = `${vv.offsetTop}px`;
+  el.style.height = `${vv.height}px`;
+  el.style.bottom = "auto";
+  el.classList.toggle("kb", vv.height < window.innerHeight - 120);
+  const log = document.getElementById("chat-log");
+  log.scrollTop = log.scrollHeight;
 }
 function renderChatHead() {
   const sub = document.getElementById("chat-sub");
