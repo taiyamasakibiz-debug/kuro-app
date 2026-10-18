@@ -346,6 +346,10 @@ body.chat-open > :not(.chat):not(script) { visibility: hidden; }
   body.app .tabs { position: static; flex: 1 1 560px; min-width: 0; flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; background: none; border: 0; transform: none; }  /* チャットで狭くなっても隠れないように折り返す */
   body.app .tab { padding: 8px 12px 10px; border-top: 0; border-bottom: 3px solid transparent; }
   body.app .tab[aria-current="true"] { border-bottom-color: var(--crayon); }
+  /* チャットを開いているときは、メニューを2段にせず1行のまま横にスクロール（スマホの下のメニューと同じ） */
+  body.app.chat-open .top-inner { flex-wrap: nowrap; }
+  body.app.chat-open .tabs { flex-wrap: nowrap; overflow-x: auto; }
+  body.app.chat-open .tab { flex: none; white-space: nowrap; }
   body.app main { max-width: none; padding: 24px 24px 64px; }
   body.app .manual { max-width: none; }
   body.app .weeks { max-width: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 600px), 1fr)); align-items: start; }
@@ -665,6 +669,7 @@ function route() {
   const h = location.hash.slice(1) || store.get("tab") || "diary";
   const tab = h.startsWith("d-") ? "diary" : (TABS.some(t => t[0] === h) ? h : "diary");
   document.getElementById("tabs").innerHTML = TABS.map(([k, label]) => `<button class="tab" data-go="${k}" aria-current="${k === tab}">${label}</button>`).join("");
+  document.querySelector('#tabs [aria-current="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });  // 横スクロールのとき、今のタブを見えるところに
   if (APP_TABS[tab]) return APP_TABS[tab]();
   if (!VAULT) return renderNoData();
   if (h.startsWith("d-")) return renderDay(h.slice(2));
@@ -971,6 +976,7 @@ let chat = null, chatBusy = false, chatPics = [];
 // 実験（try-claude-cli）: Mac のくろブリッジが配っているページ（…/app/。GitHub Pages は /kuro-app/）で開いたときは、
 // Claude API のかわりに Mac の Claude Code（claude -p）で話す。APIキーはいらない、かわりにブリッジの合言葉
 const viaBridge = location.pathname.startsWith("/app/");
+const FINE_POINTER = window.matchMedia("(hover: hover) and (pointer: fine)");  // マウス・トラックパッドの端末（PC）
 const chatReady = () => !!store.get(viaBridge ? "bridgeCode" : "anthropicKey");
 
 function loadChat() {
@@ -1007,6 +1013,18 @@ function initChat() {
   send.addEventListener("touchend", e => { e.preventDefault(); chatSend(); });  // preventDefault でキーボードも開いたまま
   send.addEventListener("click", chatSend);  // マウス・キーボード操作のとき
   const ta = document.getElementById("chat-text");
+  // PC（マウス・トラックパッド）では Enter で送る・Shift+Enter で改行。日本語の変換を決める Enter では送らない。
+  // iPhone はキーボードの改行キーのまま（Shift がないので）
+  ta.addEventListener("keydown", e => {
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229 || !FINE_POINTER.matches) return;
+    e.preventDefault(); chatSend();
+  });
+  // PC幅でメニューが横スクロールのとき、マウスのホイール（縦）でも横に動かせるように
+  document.getElementById("tabs").addEventListener("wheel", e => {
+    const t = e.currentTarget;
+    if (!WIDE.matches || t.scrollWidth <= t.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+    e.preventDefault(); t.scrollLeft += e.deltaY;
+  }, { passive: false });
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 140) + "px"; });
   const showChatPics = () => { document.getElementById("chat-pics").innerHTML = picHtml(chatPics, "data-chat-unpic"); };
   document.getElementById("chat-file").addEventListener("change", async e => {
