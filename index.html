@@ -924,9 +924,9 @@ const INBOX_TOOL = {
   },
 };
 let chat = null, chatBusy = false, chatPics = [];
-// 実験（try-claude-cli）: Mac のくろブリッジが配っているページ（http://…/app/）で開いたときは、
+// 実験（try-claude-cli）: Mac のくろブリッジが配っているページ（…/app/。GitHub Pages は /kuro-app/）で開いたときは、
 // Claude API のかわりに Mac の Claude Code（claude -p）で話す。APIキーはいらない、かわりにブリッジの合言葉
-const viaBridge = location.protocol === "http:" && location.pathname.startsWith("/app/");
+const viaBridge = location.pathname.startsWith("/app/");
 const chatReady = () => !!store.get(viaBridge ? "bridgeCode" : "anthropicKey");
 
 function loadChat() {

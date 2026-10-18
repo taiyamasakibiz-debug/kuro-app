@@ -2,6 +2,9 @@
 // ブラウザのページは CLI を起動できないので、このサーバーが代わりに起動して答えを返す。
 // - 依存なし（Node 18+）。`node bridge/server.mjs` で起動 → http://127.0.0.1:8787/（この Mac だけ）
 // - `HOST=0.0.0.0 node bridge/server.mjs` で同じ Wi-Fi の iPhone からも届く
+// - 外から使うときは、ブリッジは 127.0.0.1 のまま、Tailscale の serve を入口にする（https・サキちゃんの機械だけ）:
+//     /Applications/Tailscale.app/Contents/MacOS/Tailscale serve 8787
+//   → https://（Macの名前）.ts.net/app/ で開ける。serve も control+C で止まる
 // - 起動のたびに6けたの合言葉を作って画面に出す。合言葉がないと聞けない。5回まちがえたら止まる
 // - CLI は改造せずそのまま起動。ログインは Mac の Claude Code のもの（コードにキーは書かない）
 // - ツールは全部オフ（--tools ""）。くろはファイルを読んだり書いたりできない、話すだけ
@@ -134,7 +137,7 @@ createServer(async (req, res) => {
   if (req.method !== "POST" || (path !== "/ask" && path !== "/chat")) return send(res, 404, { error: "not found" });
   // 別のサイトのページから勝手に呼ばれないように、同じ出どころだけ受ける
   const origin = req.headers.origin;
-  if (origin && origin !== `http://${req.headers.host}`) return send(res, 403, { error: "origin" });
+  if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) return send(res, 403, { error: "origin" });
   if (misses >= 5) return send(res, 403, { error: "合言葉を5回まちがえたので止めた。サーバーを起動し直してね" });
   if (req.headers["x-kuro-code"] !== CODE) { misses++; return send(res, 401, { error: "合言葉がちがう" }); }
   if (busy) return send(res, 429, { error: "くろは今べつの返事を考え中" });
