@@ -89,6 +89,8 @@ button { font: inherit; color: inherit; }
 .brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .brand h1 { margin: 0; font-family: var(--f-hand); font-weight: 600; font-size: 1.45rem; letter-spacing: .04em; }
 .brand small { color: var(--ink-soft); font-size: .8rem; }
+.reload { border: 1.5px solid var(--rule); background: var(--paper); color: var(--ink-soft); border-radius: 99px; padding: 0 10px; min-height: 24px; cursor: pointer; font-size: .8rem; line-height: 1; }
+.reload:hover { border-color: var(--ink-soft); }
 .tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; margin-top: 4px; }
 .tabs::-webkit-scrollbar { display: none; }
 .tab { flex: none; border: 0; background: none; padding: 8px 12px 10px; cursor: pointer; color: var(--ink-soft); font-weight: 500; border-bottom: 3px solid transparent; }
@@ -737,9 +739,9 @@ window.addEventListener("hashchange", route);
    data.json と縮小画像を、くろアプリの「せってい」で入れたトークンで読む。
    画像の src は「透明gif#gh=img/xxx.webp」にしておき、画面に近づいたら取りに行って差しかえる。 */
 const BLANK = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-const gh = { repo: store.get("repo") || "taiyamasakibiz-debug/kuro-second-brain", token: store.get("token"), ref: "app-data" };
+const gh = { repo: store.get("repo") || "taiyamasakibiz-debug/kuro-second-brain", token: store.get("token"), ref: new URLSearchParams(location.search).get("ref") || "app-data" };  // ?ref=app-data-test はテスト用（送り先をテスト用ブランチにする）
 const ghFetch = (path, opt = {}) => fetch(`https://api.github.com/repos/${gh.repo}/contents/${path}?ref=${gh.ref}`, {
-  ...opt, headers: { Authorization: `Bearer ${gh.token}`, Accept: "application/vnd.github.raw+json", "X-GitHub-Api-Version": "2022-11-28" },
+  ...opt, headers: { Authorization: `Bearer ${gh.token}`, Accept: "application/vnd.github.raw+json", "X-GitHub-Api-Version": "2022-11-28", ...opt.headers },
 });
 const openCache = async name => { try { return await caches.open(name); } catch { return null; } };
 const cacheKey = path => `${location.origin}/__vault/${path}`;
@@ -779,6 +781,58 @@ function ghWatch() {
   })).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
 }
 
+/* ---- 日記データを新しくする ----
+   Vault に push があると、GitHub Actions が app-data の data.json を作り直す（1分くらい）。
+   アプリは、画面に戻ってきたとき・1分ごと・「更新」ボタンで、data.json が変わったかを確かめる。
+   ETag つきで聞くので、変わっていなければ 304（中身なし・API の回数にも数えられない）。 */
+let dataEtag = "", checking = false, lastCheck = 0;
+function applyData(data) {
+  for (const v of Object.values(data.images)) v.src = `${BLANK}#gh=${v.src}`;
+  VAULT = data;
+}
+async function checkUpdate(manual = false) {
+  if (!REMOTE || !gh.token || !VAULT || checking) return;
+  if (!manual && (document.hidden || Date.now() - lastCheck < 20e3)) return;
+  checking = true; lastCheck = Date.now();
+  const btn = document.getElementById("reload");
+  if (btn) btn.textContent = "…";
+  let result = "";
+  try {
+    const r = await ghFetch("data.json", { cache: "no-store", headers: dataEtag ? { "If-None-Match": dataEtag } : {} });
+    if (r.status === 304) result = "最新";
+    else if (r.ok) {
+      const data = await r.json();
+      dataEtag = r.headers.get("etag") || "";
+      if (data.commit === VAULT.commit) result = "最新";
+      else {
+        (await openCache("kuro-diary-data"))?.put(cacheKey("data.json"), new Response(JSON.stringify(data))).catch(() => {});
+        applyData(data);
+        start();  // 画面を描き直す（ひとこと・せっていの書きかけは消さない）
+        result = "新しくなった";
+      }
+    } else result = "読めなかった";
+  } catch { result = "つながらなかった"; }
+  checking = false;
+  if (btn) {
+    const mark = { "最新": "✓", "新しくなった": "新", "読めなかった": "×", "つながらなかった": "×" }[result];
+    if (manual || result === "新しくなった") {
+      btn.textContent = mark; btn.title = result;
+      setTimeout(() => { btn.textContent = "⟳"; btn.title = "日記を新しくする"; }, 1800);
+    } else btn.textContent = "⟳";
+  }
+}
+function initAutoRefresh() {
+  const brand = document.querySelector(".brand");
+  if (brand && !document.getElementById("reload")) {
+    brand.insertAdjacentHTML("beforeend", `<button id="reload" class="reload" type="button" title="日記を新しくする" aria-label="日記を新しくする">⟳</button>`);
+    document.getElementById("reload").addEventListener("click", () => checkUpdate(true));
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
+  window.addEventListener("focus", () => checkUpdate());
+  window.addEventListener("online", () => checkUpdate());
+  setInterval(() => checkUpdate(), 60e3);
+}
+
 let dataError = "";
 async function loadRemote() {
   document.body.classList.add("app");
@@ -793,6 +847,7 @@ async function loadRemote() {
   WIDE.addEventListener("change", () => { placeTabs(); fitChat(); });
   initChat();
   ghWatch();
+  initAutoRefresh();
   if (!gh.token) { location.hash = "settings"; route(); return; }
   if (!location.hash || location.hash === "#settings") location.hash = "diary";
   route();
@@ -806,14 +861,14 @@ async function loadData() {
     const r = await ghFetch("data.json", { cache: "no-store" });
     if (!r.ok) throw new Error(r.status);
     data = await r.json();
+    dataEtag = r.headers.get("etag") || "";
     cache?.put(cacheKey("data.json"), new Response(JSON.stringify(data))).catch(() => {});
   } catch (e) {
     const old = cache && await cache.match(cacheKey("data.json"));  // 電波がないときは前回の日記
     if (old) data = await old.json();
     else { dataError = e.message; refresh(); return; }
   }
-  for (const v of Object.values(data.images)) v.src = `${BLANK}#gh=${v.src}`;
-  VAULT = data;
+  applyData(data);
   start();
 }
 
