@@ -283,6 +283,10 @@ body.app main { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
 .form-card label { font-size: .8rem; color: var(--ink-soft); margin-bottom: -6px; }
 .form-card textarea, .form-card input { width: 100%; font: inherit; font-size: 16px; color: var(--ink); background: var(--paper); border: 1.5px solid var(--rule); border-radius: 10px; padding: 12px; }
 .form-card textarea { min-height: 200px; resize: vertical; line-height: 1.7; }
+.edit-card textarea#edit-text { min-height: 60vh; font-size: 16px; }
+.edit-other { margin-top: 12px; }
+.edit-other summary { cursor: pointer; color: var(--ink-soft); font-size: .85rem; }
+.edit-other textarea { min-height: 30vh; margin-top: 6px; opacity: .85; }
 .btn-main { border: 0; border-radius: 10px; padding: 12px; background: var(--ink); color: var(--paper); font-weight: 700; cursor: pointer; }
 .btn-main:disabled { opacity: .5; }
 .form-msg { min-height: 1.5em; font-size: .9rem; }
@@ -456,6 +460,7 @@ function renderDay(date) {
     <div class="day-nav">
       <button class="btn" data-go="diary">← 日記の一覧</button>
       <span style="display:flex;gap:8px">
+        ${REMOTE ? `<button class="btn" data-edit="${day.date}">✎ 編集</button>` : ""}
         <button class="btn" ${older ? `data-day="${older.date}"` : "disabled"}>前の日</button>
         <button class="btn" ${newer ? `data-day="${newer.date}"` : "disabled"}>次の日</button>
       </span>
@@ -668,6 +673,7 @@ function closeOverlay() { $overlay.innerHTML = ""; noteStack.length = 0; }
 
 /* ---- ルーティング ---- */
 function route() {
+  editing = null;  // ページを移ったら編集はおしまい（書きかけは localStorage に残っている）
   const h = location.hash.slice(1) || store.get("tab") || "diary";
   const tab = h.startsWith("d-") ? "diary" : (TABS.some(t => t[0] === h) ? h : "diary");
   document.getElementById("tabs").innerHTML = TABS.map(([k, label]) => `<button class="tab" data-go="${k}" aria-current="${k === tab}">${label}</button>`).join("");
@@ -788,6 +794,7 @@ function ghWatch() {
 let dataEtag = "", checking = false, lastCheck = 0;
 function applyData(data) {
   for (const v of Object.values(data.images)) v.src = `${BLANK}#gh=${v.src}`;
+  applyEdits(data);
   VAULT = data;
 }
 async function checkUpdate(manual = false) {
@@ -921,6 +928,137 @@ async function uploadPics(pics, date, title, message) {
 }
 // ファイル名の先頭には日付をつけるので、タイトル側の日付は外す
 const safeTitle = (t, fallback) => (t.replace(/^\s*\d{4}-\d{2}-\d{2}[\s\-_]*/, "").replace(/[\\/:*?"<>|#\[\]^]/g, "").trim() || fallback).slice(0, 20);
+
+/* ---- 日記の編集（くろアプリ版だけ） ----
+   編集を始めるときに、data.json ではなく GitHub から本物の daily/日付.md を読む（sha もいっしょに）。
+   保存は sha つきで書くので、読んだあとにほか（Obsidian・ブリッジのくろ・朝の整理）で変わっていたら GitHub が断る（409）。
+   そのときは最新を下に出して、見くらべて直してからもう一度保存してもらう（勝手に上書きしない）。
+   保存できたら、その日のカードをアプリの中ですぐ作り直す（dayEdits に覚えておく）。
+   Actions が作り直した data.json がその編集を含む（その日の sha が同じ）まで、または15分たつまで、覚えたほうを重ねる。 */
+let editing = null;  // { date, path, sha, front, text, other, msg }
+const writeBranch = () => new URLSearchParams(location.search).get("src") || store.get("branch") || "main";
+const unb64 = c => new TextDecoder().decode(Uint8Array.from(atob(c.replace(/\s/g, "")), ch => ch.charCodeAt(0)));
+const readJson = (k, d) => { try { return JSON.parse(store.get(k) || "") ?? d; } catch { return d; } };
+function splitFront(text) {
+  if (!text.startsWith("---")) return { front: "", body: text };
+  const end = text.indexOf("\n---", 3);
+  if (end < 0) return { front: "", body: text };
+  return { front: text.slice(0, end + 4), body: text.slice(end + 4).replace(/^\n+/, "") };
+}
+// build.py の plain() と build_days() のまね（一覧のカードに出す部分だけ）
+const plainLine = l => l.replace(/!\[\[[^\]]+\]\]/g, "").replace(/\[\[([^\]|#]+)(?:#[^\]|]*)?\|([^\]]+)\]\]/g, "$2")
+  .replace(/\[\[([^\]|#]+)(?:#[^\]]*)?\]\]/g, "$1").replace(/\*\*|__|`/g, "").replace(/^[-* ]+/, "").trim();
+function daySummary(body) {
+  const secs = {}; let cur = null;
+  for (const line of body.split("\n")) {
+    if (line.startsWith("## ")) { cur = line.slice(3).trim(); secs[cur] = []; }
+    else if (cur) secs[cur].push(line);
+  }
+  const top = (secs["今日あったこと"] || []).join("\n").trim().split("\n").filter(l => l.startsWith("- "));
+  return {
+    images: [...body.matchAll(/!\[\[([^\]]+)\]\]/g)].map(m => m[1].split("|")[0].trim()),
+    lines: top.map(plainLine).filter(Boolean),
+    highlights: top.filter(l => l.startsWith("- **")).map(plainLine),
+    count: top.length,
+  };
+}
+function applyEdits(data) {
+  const edits = readJson("dayEdits", {});
+  for (const [date, e] of Object.entries(edits)) {
+    const day = data.days.find(d => d.date === date);
+    if (!day || day.sha === e.sha || Date.now() - e.at > 15 * 60e3) { delete edits[date]; continue; }
+    if (data.notes[date]) data.notes[date].body = e.body;
+    Object.assign(day, daySummary(e.body), { sha: e.sha });
+  }
+  store.set("dayEdits", JSON.stringify(edits));
+}
+async function readDaily(path) {
+  const r = await ghApi(`contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(writeBranch())}`, { cache: "no-store" });
+  if (!r.ok) throw new Error(r.status);
+  const j = await r.json();
+  return { sha: j.sha, ...splitFront(unb64(j.content)) };
+}
+async function openEditor(date) {
+  const path = `daily/${date}.md`;
+  editing = { date, path, loading: true };
+  $view.innerHTML = `<p class="empty-note">日記を読んでるよ…</p>`;
+  try {
+    const f = await readDaily(path);
+    if (editing?.date !== date) return;  // 読んでるあいだに別のページへ移った
+    const draft = readJson(`editDraft:${date}`, null);
+    editing = { date, path, sha: f.sha, front: f.front, text: f.body, other: "", msg: "" };
+    if (draft && draft.text !== f.body) {
+      editing.text = draft.text;
+      if (draft.sha !== f.sha) { editing.other = f.body; editing.msg = "書きかけを戻したよ。そのあとに、ほかで日記が変わってるから、下の最新と見くらべてね"; }
+      else editing.msg = "書きかけを戻したよ";
+    }
+    renderEditor();
+  } catch (e) {
+    editing = null;
+    $view.innerHTML = `<p class="empty-note">日記が読めなかった（${esc(e.message)}）<br><button class="btn" data-day="${date}">もどる</button></p>`;
+  }
+}
+function renderEditor() {
+  const e = editing;
+  $view.innerHTML = `
+    <div class="day-nav">
+      <button class="btn" id="edit-cancel">やめる</button>
+      <span style="color:var(--ink-soft);font-size:.85rem">${jpDate(e.date)} を編集</span>
+    </div>
+    <div class="form-card edit-card">
+      <textarea id="edit-text" spellcheck="false">${esc(e.text)}</textarea>
+      <button class="btn-main" id="edit-save">保存する</button>
+      <div class="form-msg${e.other ? " ng" : ""}" id="edit-msg">${esc(e.msg || "")}</div>
+      ${e.other ? `<details class="edit-other" open><summary>いまの GitHub の日記（ほかで変わったもの）</summary><textarea readonly>${esc(e.other)}</textarea></details>` : ""}
+    </div>`;
+}
+async function saveEditor() {
+  const e = editing, btn = document.getElementById("edit-save"), msg = document.getElementById("edit-msg");
+  let text = document.getElementById("edit-text").value.replace(/\r\n/g, "\n");
+  if (!text.endsWith("\n")) text += "\n";
+  if (text === e.text && !e.other) { msg.className = "form-msg"; msg.textContent = "変わってないよ"; return; }
+  btn.disabled = true; msg.className = "form-msg"; msg.textContent = "保存してる…";
+  try {
+    const r = await ghApi(`contents/${e.path.split("/").map(encodeURIComponent).join("/")}`, {
+      method: "PUT",
+      body: JSON.stringify({ message: `daily: ${e.date}（くろアプリから）`, content: b64((e.front ? e.front + "\n" : "") + text), sha: e.sha, branch: writeBranch() }),
+    });
+    if (r.status === 409) {  // 読んだあとに、ほかで変わっていた
+      const f = await readDaily(e.path);
+      Object.assign(e, { sha: f.sha, front: f.front, text, other: f.body, msg: "ほかで日記が変わってたよ。下の最新と見くらべて、書きかけを直してから、もう一度保存してね（このまま保存すると、書きかけで上書きになるよ）" });
+      store.set(`editDraft:${e.date}`, JSON.stringify({ sha: f.sha, text }));
+      return renderEditor();
+    }
+    if (!r.ok) throw new Error(r.status);
+    const sha = (await r.json()).content.sha;
+    const edits = readJson("dayEdits", {});
+    edits[e.date] = { sha, body: text, at: Date.now() };
+    store.set("dayEdits", JSON.stringify(edits));
+    try { localStorage.removeItem(`editDraft:${e.date}`); } catch {}
+    applyEdits(VAULT);
+    editing = null;
+    renderDay(e.date);
+  } catch (err) {
+    btn.disabled = false; msg.className = "form-msg ng"; msg.textContent = `保存できなかった（${err.message}）。書きかけは残ってるよ`;
+  }
+}
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-edit],#edit-save,#edit-cancel");
+  if (!t) return;
+  if (t.dataset.edit) openEditor(t.dataset.edit);
+  else if (t.id === "edit-save") saveEditor();
+  else if (t.id === "edit-cancel") {
+    const now = document.getElementById("edit-text")?.value;
+    if (now !== undefined && now !== editing?.text && !confirm("書きかけを捨てて、やめる？")) return;
+    const date = editing?.date;
+    try { localStorage.removeItem(`editDraft:${date}`); } catch {}
+    editing = null;
+    renderDay(date);
+  }
+});
+document.addEventListener("input", e => {
+  if (e.target.id === "edit-text" && editing) store.set(`editDraft:${editing.date}`, JSON.stringify({ sha: editing.sha, text: e.target.value }));
+});
 
 let memoPics = [];
 function renderMemo() {
@@ -1377,6 +1515,6 @@ function start() {
   refresh();
 }
 // データが届いたら画面を描き直す。ひとこと・せっていを開いているときは、書きかけを消さないようにそのまま
-function refresh() { if (!APP_TABS[location.hash.slice(1)]) route(); }
+function refresh() { if (!editing && !APP_TABS[location.hash.slice(1)]) route(); }
 if (VAULT) start(); else loadRemote();
 </script>
