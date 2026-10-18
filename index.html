@@ -1065,7 +1065,7 @@ async function callBridge() {
       method: "POST",
       headers: { "content-type": "application/json", "x-kuro-code": store.get("bridgeCode") },
       body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel() }),
-      signal: AbortSignal.timeout(150_000),  // ブリッジ側は2分で打ち切るので、それより少し長く待つ
+      signal: AbortSignal.timeout(210_000),  // ブリッジ側は3分で打ち切るので、それより少し長く待つ
     });
   } catch { throw new Error(asleep); }
   if (r.status === 502 || r.status === 503 || r.status === 504) throw new Error(asleep);  // serve は動いているがブリッジがいない
