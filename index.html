@@ -329,6 +329,33 @@ body.chat-open > :not(.chat):not(script) { visibility: hidden; }
 .chat-pics { padding: 8px max(12px, env(safe-area-inset-right, 0px)) 0 max(12px, env(safe-area-inset-left, 0px)); background: var(--paper); }
 .bubble.me.has-pic { padding: 4px; background: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 .bubble .chat-img { max-width: 200px; max-height: 240px; border-radius: 12px; display: block; }
+.chat-split { display: none; }
+
+/* くろアプリ版のPC幅（900px以上）: メニューは左上・中身はウィンドウいっぱいに並べる・チャットは右に並べて仕切りで幅を変える。スマホ幅は上のまま */
+@media (min-width: 900px) {
+  :root { --chat-pane: clamp(320px, var(--chat-w, 420px), calc(100vw - 380px)); }
+  body.app .top-inner { max-width: none; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 28px; padding-block: 8px 0; padding-inline: 24px; }
+  body.app .brand { flex: none; }
+  body.app .tabs { position: static; flex: 1 1 560px; min-width: 0; flex-wrap: wrap; overflow: visible; margin: 0; padding: 0; background: none; border: 0; transform: none; }  /* チャットで狭くなっても隠れないように折り返す */
+  body.app .tab { padding: 8px 12px 10px; border-top: 0; border-bottom: 3px solid transparent; }
+  body.app .tab[aria-current="true"] { border-bottom-color: var(--crayon); }
+  body.app main { max-width: none; padding: 24px 24px 64px; }
+  body.app .manual { max-width: none; }
+  body.app .weeks { max-width: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 600px), 1fr)); align-items: start; }
+  body.app .chat-fab { bottom: 24px; right: 24px; }
+
+  /* チャットを開くと、日記やノートは左にずれて、くろは右にならぶ */
+  body.app.chat-open { overflow: visible; padding-right: var(--chat-pane); }
+  body.app.chat-open > :not(.chat):not(script) { visibility: visible; }
+  body.app.chat-open .sheet-wrap, body.app.chat-open .lightbox { right: var(--chat-pane); }
+  body.app .chat { inset: 0 0 0 auto; width: var(--chat-pane); padding-top: 0; border-left: 1px solid var(--rule); box-shadow: -8px 0 24px -18px rgba(0, 0, 0, .4); }
+  body.app .chat-input { padding-bottom: 8px; }
+  body.app .chat-split { display: block; position: absolute; top: 0; bottom: 0; left: -6px; width: 12px; cursor: col-resize; touch-action: none; z-index: 1; }
+  body.app .chat-split::after { content: ""; position: absolute; top: 50%; left: 4px; width: 4px; height: 48px; margin-top: -24px; border-radius: 99px; background: var(--rule); }
+  body.app .chat-split:hover::after, body.app .chat-split:focus-visible::after, body.dragging .chat-split::after { background: var(--crayon); }
+  body.dragging { cursor: col-resize; user-select: none; -webkit-user-select: none; }
+  body.dragging iframe, body.dragging main { pointer-events: none; }
+}
 </style>
 
 <div class="room-bg" id="room-bg" aria-hidden="true"></div>
@@ -359,6 +386,7 @@ const jpDate = s => { const d = parseDate(s); return `${d.getMonth() + 1}月${d.
 const modeOf = s => VAULT.modes[parseDate(s).getDate() % 6];
 const modeImg = m => img(VAULT.modeImage[m])?.src || "";
 const dayImages = day => day.images.filter(img);
+const WIDE = window.matchMedia("(min-width: 900px)");  // くろアプリ版のPC幅（CSS の @media と同じ幅）
 const store = { get(k) { try { return localStorage.getItem(k); } catch { return null; } }, set(k, v) { try { localStorage.setItem(k, v); } catch {} } };
 
 function moodChip(mode) {
@@ -735,8 +763,15 @@ function ghWatch() {
 let dataError = "";
 async function loadRemote() {
   document.body.classList.add("app");
-  // タブを sticky のヘッダーの外に出す（中に入れたまま fixed にすると、iOS Safari でスクロール中に文字が消える）
-  document.body.appendChild(document.getElementById("tabs"));
+  // スマホ幅: タブを sticky のヘッダーの外に出す（中に入れたまま fixed にすると、iOS Safari でスクロール中に文字が消える）
+  // PC幅: タブはヘッダーの中に戻して、タイトルのとなり（左上）に並べる
+  const placeTabs = () => {
+    const tabs = document.getElementById("tabs");
+    if (WIDE.matches) document.querySelector(".top-inner").appendChild(tabs);
+    else document.body.appendChild(tabs);
+  };
+  placeTabs();
+  WIDE.addEventListener("change", () => { placeTabs(); fitChat(); });
   initChat();
   ghWatch();
   if (!gh.token) { location.hash = "settings"; route(); return; }
@@ -937,6 +972,7 @@ function initChat() {
   document.body.insertAdjacentHTML("beforeend", `
     <button class="chat-fab" id="chat-fab" aria-label="くろとおはなし"><img src="${CHAT_ICON}" alt=""></button>
     <section class="chat" id="chat" aria-label="くろとおはなし">
+      <div class="chat-split" id="chat-split" role="separator" aria-orientation="vertical" aria-label="チャットの幅" tabindex="0" title="ドラッグで幅を変える（ダブルクリックでもとにもどす）"></div>
       <header class="chat-head"><img src="${CHAT_ICON}" alt=""><div><b>くろとおはなし</b><small id="chat-sub"></small></div>
         <button class="btn" id="chat-new">あたらしく</button><button class="icon-btn" id="chat-close" aria-label="とじる">✕</button></header>
       <div class="chat-log" id="chat-log"></div>
@@ -968,10 +1004,40 @@ function initChat() {
     const b = e.target.closest("[data-inbox]");
     if (b) decideInbox(b.dataset.inbox, b.dataset.answer === "yes");
   });
+  initChatSplit();
+}
+// PC幅: 日記とチャットのあいだの仕切り。左右にドラッグでチャットの幅を変える（幅は覚えておく）
+function initChatSplit() {
+  const split = document.getElementById("chat-split"), root = document.documentElement;
+  const setW = w => {
+    w = Math.round(Math.max(320, Math.min(w, window.innerWidth - 380)));
+    root.style.setProperty("--chat-w", `${w}px`);
+    return w;
+  };
+  const saved = +store.get("chatWidth");
+  if (saved) setW(saved);
+  const done = () => { document.body.classList.remove("dragging"); store.set("chatWidth", parseInt(root.style.getPropertyValue("--chat-w")) || ""); };
+  split.addEventListener("pointerdown", e => {
+    e.preventDefault();
+    split.setPointerCapture(e.pointerId);
+    document.body.classList.add("dragging");
+  });
+  split.addEventListener("pointermove", e => { if (document.body.classList.contains("dragging")) setW(window.innerWidth - e.clientX); });
+  split.addEventListener("pointerup", done);
+  split.addEventListener("pointercancel", done);
+  split.addEventListener("dblclick", () => { root.style.removeProperty("--chat-w"); store.set("chatWidth", ""); });
+  split.addEventListener("keydown", e => {
+    const step = e.key === "ArrowLeft" ? 32 : e.key === "ArrowRight" ? -32 : 0;
+    if (!step) return;
+    e.preventDefault();
+    store.set("chatWidth", setW(document.getElementById("chat").offsetWidth + step));
+  });
 }
 function fitChat() {
   const el = document.getElementById("chat"), vv = window.visualViewport;
-  if (!el || !vv || !document.body.classList.contains("chat-open")) return;
+  if (!el) return;
+  if (WIDE.matches) { el.style.top = el.style.height = el.style.bottom = ""; el.classList.remove("kb"); return; }  // PC幅は CSS のまま右にならべる
+  if (!vv || !document.body.classList.contains("chat-open")) return;
   el.style.top = `${vv.offsetTop}px`;
   el.style.height = `${vv.height}px`;
   el.style.bottom = "auto";
