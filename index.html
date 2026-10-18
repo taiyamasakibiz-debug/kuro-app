@@ -309,6 +309,13 @@ body.chat-open > :not(.chat):not(script) { visibility: hidden; }
 .bubble { max-width: 82%; padding: 9px 13px; border-radius: 16px; white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
 .bubble.me { align-self: flex-end; background: var(--ink); color: var(--paper); border-bottom-right-radius: 4px; }
 .bubble.kuro { align-self: flex-start; background: var(--paper); box-shadow: var(--shadow); border-bottom-left-radius: 4px; }
+.bubble.kuro.md { white-space: normal; }  /* くろの返事は Markdown を表示する */
+.bubble.md p { margin: 0 0 .5em; }
+.bubble.md > :last-child { margin-bottom: 0; }
+.bubble.md ul, .bubble.md ol { margin: .2em 0 .5em; padding-left: 1.3em; }
+.bubble.md h1, .bubble.md h2, .bubble.md h3, .bubble.md h4 { font-size: 1em; margin: .3em 0; }
+.bubble.md code { font-size: .9em; background: color-mix(in srgb, var(--ink) 8%, transparent); padding: 0 4px; border-radius: 4px; }
+.bubble.md pre { white-space: pre-wrap; margin: .3em 0 .5em; }
 .bubble.note { align-self: center; background: none; color: var(--ink-soft); font-size: .8rem; text-align: center; }
 .bubble.thinking { color: var(--ink-soft); font-family: var(--f-hand); }
 .propose { align-self: flex-start; max-width: 82%; background: var(--paper); border: 1.5px dashed var(--rule); border-radius: 14px; padding: 10px 13px; display: flex; flex-direction: column; gap: 8px; }
@@ -904,7 +911,9 @@ ${viaBridge ? `
       <input id="set-chat-key" type="password" placeholder="${store.get("anthropicKey") ? "保存ずみ（変えるときだけ貼る）" : "sk-ant-..."}" autocapitalize="none" autocorrect="off" spellcheck="false">
       <button class="btn-main" id="set-chat-save">キーを保存</button>`}
       <div class="form-msg" id="set-chat-msg"></div>
-      <p class="form-hint">モデルは選ぶとすぐ切りかわるよ（キーの入れ直しはいらない）。APIキーはこのiPhoneの中にだけ保存されるよ。話した分だけ料金がかかるから、Claude Console で月の上限額を決めておいてね。</p>
+      <p class="form-hint">${viaBridge
+        ? "モデルは選ぶとすぐ切りかわるよ。くろは Mac の Claude Code で動くから、APIの料金はかからないかわりに、Claude のプランの枠を使うよ。使った量はブリッジのターミナルに出るよ。合言葉はこの端末の中にだけ保存されるよ。ブリッジを起動するたびに変わるから、起動したら入れ直してね。"
+        : "モデルは選ぶとすぐ切りかわるよ（キーの入れ直しはいらない）。APIキーはこのiPhoneの中にだけ保存されるよ。話した分だけ料金がかかるから、Claude Console で月の上限額を決めておいてね。"}</p>
     </div>`;
 }
 function saveChatSettings() {
@@ -942,7 +951,7 @@ async function saveSettings() {
    Claude API をブラウザから直接呼ぶ（ビルドなしのページなので SDK は使わず HTTP）。キーはこの端末の localStorage だけ。
    会話は1日ごと。履歴は API の content をそのまま持ち回る（thinking ブロックを消したり編集したりしない）。
    「inbox入れとく？」は save_to_inbox ツール → 提案カードのボタンでサキちゃんが決める。結果は次の発言の先頭で tool_result として返す */
-const CHAT_MODELS = [["claude-sonnet-5-5", "Sonnet 5.5（ふつう）"], ["claude-haiku-5-5", "Haiku 5.5（安い・速い）"]];
+const CHAT_MODELS = [["claude-sonnet-5-5", "Sonnet 5.5"], ["claude-opus-5-5", "Opus 5.5"], ["claude-haiku-5-5", "Haiku 5.5"]];
 const chatModel = () => CHAT_MODELS.some(m => m[0] === store.get("chatModel")) ? store.get("chatModel") : CHAT_MODELS[0][0];
 const CHAT_ICON = "chibi-kuro.png";
 const INBOX_TOOL = {
@@ -1009,6 +1018,8 @@ function initChat() {
     if (un) { chatPics.splice(+un.dataset.chatUnpic, 1); showChatPics(); }
   });
   document.getElementById("chat-log").addEventListener("click", e => {
+    // スマホ幅ではチャットが全画面なので、ノートや日記へのリンクを押したらチャットを閉じて見せる（PC幅は横に並ぶのでそのまま）
+    if (e.target.closest(".bubble [data-note], .bubble [data-day]") && !WIDE.matches) document.body.classList.remove("chat-open");
     const b = e.target.closest("[data-inbox]");
     if (b) decideInbox(b.dataset.inbox, b.dataset.answer === "yes");
   });
@@ -1058,6 +1069,24 @@ function renderChatHead() {
   if (sub) sub.textContent = `今日は${VAULT ? modeOf(jstNow().date) : ""}モード ・ ${viaBridge ? "Mac の Claude Code ・ " : ""}${CHAT_MODELS.find(m => m[0] === chatModel())[1]}`;
 }
 
+// くろの返事: 太字・箇条書きなどを表示し、[[ノート名]] はタップで開けるようにする（日付ならその日の日記）。
+// 返事には Vault から読んだ文も混ざるので、HTML になる文字は先に無害化してから Markdown にする
+function chatMd(text) {
+  const links = [];
+  const s = text.replace(/\[\[([^\]]+)\]\]/g, (_, raw) => {
+    const [target, alias] = raw.split("|");
+    const name = target.split("#")[0].trim().split("/").pop();
+    const label = esc((alias || target).trim());
+    links.push(VAULT?.days?.some(d => d.date === name) ? `<button type="button" class="wl" data-day="${esc(name)}">${label}</button>`
+      : VAULT?.notes[name] ? `<button type="button" class="wl" data-note="${esc(name)}">${label}</button>`
+      : `<span class="wl missing">${label}</span>`);
+    return `KUROLINK${links.length - 1}KURO`;
+  });
+  // **太字** は先に <strong> にする（Markdown のきまりだと「**「〜」**に」のように記号のすぐ後に文字が続くと太字にならないため）
+  const bold = esc(s).replace(/\*\*(?=\S)([^*\n]+?)\*\*/g, "<strong>$1</strong>");
+  return marked.parse(bold, { breaks: true }).replace(/KUROLINK(\d+)KURO/g, (_, i) => links[+i]);
+}
+
 function renderChat() {
   renderChatHead();
   const log = document.getElementById("chat-log");
@@ -1070,7 +1099,7 @@ function renderChat() {
     const imgs = blocks.filter(b => b.type === "image");
     if (imgs.length) items.push(`<div class="bubble me has-pic">${imgs.map(b => `<img class="chat-img" src="data:${b.source.media_type};base64,${b.source.data}" alt="">`).join("")}</div>`);
     for (const b of blocks) {
-      if (b.type === "text" && b.text.trim()) items.push(`<div class="bubble ${m.role === "user" ? "me" : "kuro"}">${esc(b.text.trim())}</div>`);
+      if (b.type === "text" && b.text.trim()) items.push(m.role === "user" ? `<div class="bubble me">${esc(b.text.trim())}</div>` : `<div class="bubble kuro md">${chatMd(b.text.trim())}</div>`);
       if (b.type === "tool_use" && b.name === "save_to_inbox") {
         const d = chat.decisions[b.id];
         items.push(`<div class="propose"><p>📥 inboxに入れとく？<br><b>${esc(b.input.title)}</b></p>${

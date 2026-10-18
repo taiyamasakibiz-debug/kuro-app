@@ -41,7 +41,7 @@ const READ_ONLY = ["--restricted", "--tools", "Read,Glob,Grep", "--permission-mo
   "--settings", JSON.stringify({ permissions: { deny: ["Read(./.git/**)"] } })];
 const page = new URL("./test.html", import.meta.url);
 const appRoot = new URL("../", import.meta.url);
-const MODELS = ["claude-sonnet-5-5", "claude-haiku-5-5"];  // アプリのせっていで選べるもの
+const MODELS = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"];  // アプリのせっていで選べるもの
 const TYPES = { html: "text/html; charset=utf-8", png: "image/png", js: "text/javascript", webmanifest: "application/manifest+json" };
 
 const CODE = String(randomInt(0, 1_000_000)).padStart(6, "0");
