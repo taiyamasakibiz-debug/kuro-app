@@ -11,9 +11,10 @@
 // - CLI は改造せずそのまま起動。ログインは Mac の Claude Code のもの（コードにキーは書かない）
 // - /ask はツールなし（話すだけ）。/chat は Vault を読める（ステップ①）・inbox と日記には書ける（ステップ②）:
 //   Read・Glob・Grep・Write・Edit だけ渡して、Vault のフォルダで起動する。--restricted でコマンド・ネットの道具を外し、
-//   ファイルの道具を Vault の中に閉じこめる。.git も読まない。書けるのは inbox/ と daily/ の中だけ
+//   ファイルの道具を Vault の中に閉じこめる。.git も読まない。書けるのは WRITE_DIRS（inbox・daily・notes・people・projects・shops・kuro）の中だけ。
+//   書くのは「足す・新しく作る」だけ。今ある文を直すときは、くろは書かずに <edit> の印で案を出す → アプリの編集画面で、サキちゃんが見て保存する
 //   （ほかのフォルダへの書きこみは、許可がないので自動で断られる）。消す道具はない
-//   くろが書いたファイル（inbox/ と daily/ のうち、この返事のあいだに変わったものだけ）は、返事のあとにこのサーバーが
+//   くろが書いたファイル（WRITE_DIRS のうち、この返事のあいだに変わったものだけ）は、返事のあとにこのサーバーが
 //   コミットして push する（ステップ③）。Vault が main にいるときだけ。くろ自身は git を使えない
 //   自動コミットを止めるときは AUTO_COMMIT=0、書く道具も外して読むだけに戻すときは WRITABLE=0。Vault の場所は VAULT_DIR で変えられる
 // - MCP・設定・CLAUDE.md は読みこまない（--strict-mcp-config --setting-sources ""）。
@@ -45,7 +46,7 @@ const VAULT_OK = existsSync(`${VAULT}/CLAUDE.md`);
 // Vault を読む道具（ステップ①）に、inbox と日記だけ書ける道具を足したもの（ステップ②）
 const WRITABLE = process.env.WRITABLE !== "0";
 const AUTO_COMMIT = WRITABLE && process.env.AUTO_COMMIT !== "0";
-const WRITE_DIRS = ["inbox", "daily"];
+const WRITE_DIRS = ["inbox", "daily", "notes", "people", "projects", "shops", "kuro"];  // 足す・新しく作るだけ（今ある行が変わったらコミットしない）
 const VAULT_TOOLS = ["--restricted", "--tools", WRITABLE ? "Read,Glob,Grep,Write,Edit" : "Read,Glob,Grep", "--permission-mode", "dontAsk",
   "--settings", JSON.stringify({ permissions: {
     allow: WRITABLE ? WRITE_DIRS.flatMap((d) => [`Write(./${d}/**)`, `Edit(./${d}/**)`]) : [],
@@ -116,13 +117,26 @@ const VAULT_RULE = `
 - 答えに使ったノートは [[ノート名]] の形で書く。見つからなかったら、推測で答えずに「見つからなかった」と言う`;
 
 const WRITE_RULE = `
-- 書けるのは inbox/ と daily/ の中だけ（Write・Edit）。ほかのフォルダは書けない。消すことも、既存のノートの書き換えもしない
-- 書く前に、何をどこに書くかを一言伝えて「入れとく？」と聞く。サキちゃんが OK と言ってから書く。「日記に書いて」「inboxに入れて」とはっきり頼まれたときは、聞かずに書いていい。雑談の全文は保存しない
-- inbox: inbox/YYYY-MM-DD-タイトル.md を新しく作る（1気づき1ファイル。同じ名前があれば作らず別の名前にする）。先頭に frontmatter（type: inbox / created: YYYY-MM-DD / tags: [くろとおはなし]）、そのあと # タイトル と本文
-- 日記: daily/YYYY-MM-DD.md の「今日あったこと」などの見出しの下に、箇条書きで1〜数行を足す。Edit の old_string には今ある最後の行をそのまま入れ、new_string は「その行そのまま + 改行 + 新しい行」にする（今ある行を消したり、書きかえたりしない。消えた行があると、ブリッジがコミットしない）。その日のファイルがなければ、先頭に frontmatter（type: daily / date: YYYY-MM-DD / tags: [daily]）と # YYYY-MM-DD、見出し（## 今日あったこと / ## 気づき・学び / ## 相談したこと / ## 明日やること）をつけて作る
+
+# Vault に書ける（この画面だけのきまり）
+Write・Edit で書けるのは inbox/ daily/ notes/ people/ projects/ shops/ kuro/ の中だけ。ほかのフォルダ（templates/ attachments/ .diary-app/ など）は書けない。消す・名前を変える道具はない。
+書いていいのは「足す」と「新しく作る」だけ。今ある文を消したり書きかえたりしない（消えた行があると、ブリッジがコミットしない）。
+- 書く前に、何をどこに書くかを一言伝えて「入れとく？」と聞く。サキちゃんが OK と言ってから書く。「日記に書いて」「〇〇のノートに足して」とはっきり頼まれたときは、聞かずに書いていい。雑談の全文は保存しない
+- kuro/ と notes/サキちゃんの自己評価メモ.md は、頼まれたときでも、書く前に必ず「入れとく？」と聞く。自己評価メモはサキちゃんの言葉のまま書く（くろの解釈を混ぜない）
+- 足すとき: Edit の old_string には今ある最後の行（または足したい見出しの行）をそのまま入れ、new_string は「その行そのまま + 改行 + 新しい行」にする
+- 新しいノートを作る前に、Grep で同じテーマのノートがないか探す。あれば、新しく作らずにそこへ足す
+- 新しいノートは templates/ のひな形（daily.md・note.md・person.md・project.md・shop.md・kuro.md）を Read して、その形で作る（{{date:YYYY-MM-DD}} は今日の日付、{{title}} はノート名）。inbox は inbox/YYYY-MM-DD-タイトル.md（frontmatter は type: inbox / created / tags: [くろとおはなし]）。同じ名前のファイルがあれば作らない
+- 日記は daily/YYYY-MM-DD.md の「今日あったこと」などの見出しの下に、箇条書きで足す。その日のファイルがなければ templates/daily.md の形で作る
 - 事実と気づきを分け、推測で盛らない。パスワード・口座番号・カード番号など機微な情報は書かない。人・ノートに触れたら [[ノート名]] でリンクする
 - 画像をつけて「inboxに入れとく？」と提案するときは、今までどおり返事の最後の <inbox> の印を使う（画像の保存はアプリがやる）
-- 書いたら、どのファイルに何を書いたかを返事で伝える。書けなかったら、そう言う（書いたふりをしない）`;
+- 書いたら、どのファイルに何を書いたかを返事で伝える。書けなかったら、そう言う（書いたふりをしない）
+
+# 今ある文を直したいとき（直し案）
+今ある文を消す・書きかえる・並べかえるときは、自分では書かない。かわりに、返事の最後に次の形を1つだけ書く（サキちゃんに頼まれたとき、またはサキちゃんが「直して」と言ったときだけ）:
+<edit path="notes/ノート名.md" reason="何をどう直したか（短く）">直したあとのファイルの中身ぜんぶ（frontmatter から最後まで）</edit>
+- 先に Read で今のファイルを全部読んでから、直したいところ以外はそのまま写す（省略しない・「…」で縮めない）
+- この印は画面で「くろの直し案」のボタンになる。サキちゃんがアプリの編集画面で、今のノートと見くらべてから保存する（勝手には保存されない）
+- kuro/ と自己評価メモも、直すときはこの形で案を出す`;
 
 const COMMIT_RULE = `
 - 書いたファイルは、返事のあとに自動でコミット・push される（git は使わなくていい）。アプリの日記に出るのは、朝4時の更新のあと`;
@@ -131,6 +145,7 @@ function blockText(b) {
   if (b.type === "text") return b.text;
   if (b.type === "image") return "（画像）";
   if (b.type === "tool_use" && b.name === "save_to_inbox") return `（くろが「inboxに入れとく？」と提案: ${b.input?.title || ""}）`;
+  if (b.type === "tool_use" && b.name === "propose_edit") return `（くろが直し案を出した: ${b.input?.path || ""} ${b.input?.reason || ""}）`;
   if (b.type === "tool_result") return `（さっきの提案の結果: ${typeof b.content === "string" ? b.content : ""}）`;
   return "";
 }
@@ -149,13 +164,21 @@ function chatInput(messages) {
   return JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n";
 }
 
+// 返事の最後の印（<inbox> と <edit>）を、アプリの tool_use の形に直す
 function toApiContent(text) {
-  const m = text.match(/<inbox\s+title="([^"]*)"\s+images="(true|false)"\s*>([\s\S]*?)<\/inbox>/);
-  if (!m) return [{ type: "text", text: text.trim() }];
-  const rest = (text.slice(0, m.index) + text.slice(m.index + m[0].length)).trim();
-  const content = rest ? [{ type: "text", text: rest }] : [];
-  content.push({ type: "tool_use", id: `bridge_${randomUUID()}`, name: "save_to_inbox", input: { title: m[1], body: m[3].trim(), attach_images: m[2] === "true" } });
-  return content;
+  const tools = [];
+  const take = (re, make) => {
+    const m = text.match(re);
+    if (!m) return;
+    text = text.slice(0, m.index) + text.slice(m.index + m[0].length);
+    tools.push({ type: "tool_use", id: `bridge_${randomUUID()}`, ...make(m) });
+  };
+  take(/<inbox\s+title="([^"]*)"\s+images="(true|false)"\s*>([\s\S]*?)<\/inbox>/,
+    (m) => ({ name: "save_to_inbox", input: { title: m[1], body: m[3].trim(), attach_images: m[2] === "true" } }));
+  take(/<edit\s+path="([^"]*)"(?:\s+reason="([^"]*)")?\s*>\n?([\s\S]*?)<\/edit>/,
+    (m) => ({ name: "propose_edit", input: { path: m[1].trim(), reason: (m[2] || "").trim(), content: m[3].replace(/\s+$/, "") + "\n" } }));
+  text = text.trim();
+  return [...(text ? [{ type: "text", text }] : []), ...tools];
 }
 
 // Vault で git を動かす（失敗しても例外にせず、{ ok, out } で返す）
@@ -163,7 +186,7 @@ const git = (...args) => new Promise((resolve) => {
   execFile("git", args, { cwd: VAULT }, (e, stdout, stderr) => resolve({ ok: !e, out: (stdout || "") + (stderr || "") }));
 });
 
-// この返事のあいだ（sinceMs 以降）に変わった inbox/ と daily/ のファイル（新しいものも含む）
+// この返事のあいだ（sinceMs 以降）に変わった WRITE_DIRS のファイル（新しいものも含む）
 async function wroteSince(sinceMs) {
   const r = await git("status", "--porcelain", "-z", "-uall", "--", ...WRITE_DIRS);  // -z: 日本語のファイル名を引用符つきにしない
   if (!r.ok) return [];
@@ -196,7 +219,8 @@ async function commitWrote(files) {
     if (!files.length) return notice;
   }
   const names = files.map((f) => f.split("/").pop().replace(/\.md$/, ""));
-  const msg = `${files.some((f) => f.startsWith("inbox/")) ? "inbox" : "daily"}: ${names.join("、")}（ブリッジのくろから）`;
+  const dirs = [...new Set(files.map((f) => f.split("/")[0]))];
+  const msg = `${dirs.join("・")}: ${names.join("、")}（ブリッジのくろから）`;
   for (const [label, args] of [
     ["add", ["add", "--", ...files]],
     ["commit", ["commit", "-m", msg, "--", ...files]],
@@ -296,7 +320,7 @@ createServer(async (req, res) => {
   const base = `http://${HOST === "0.0.0.0" && lan ? lan : HOST}:${PORT}`;
   console.log(`くろブリッジ: ${base}/   くろアプリ: ${base}/app/`);
   console.log(`合言葉: ${CODE}`);
-  console.log(VAULT_OK ? `くろは Vault を読めるよ${WRITABLE ? `（inbox/ と daily/ には書ける${AUTO_COMMIT ? "。書いたら自動でコミット・push する" : "。コミット・push はしない"}）` : "（読むだけ）"}: ${VAULT}` : `Vault が見つからない（${VAULT}）。くろは話すだけ`);
+  console.log(VAULT_OK ? `くろは Vault を読めるよ${WRITABLE ? `（${WRITE_DIRS.join("・")} に足せる${AUTO_COMMIT ? "。書いたら自動でコミット・push する" : "。コミット・push はしない"}）` : "（読むだけ）"}: ${VAULT}` : `Vault が見つからない（${VAULT}）。くろは話すだけ`);
   // -w: ブリッジ（このプロセス）が終わったら caffeinate も終わる
   spawn("caffeinate", ["-i", "-w", String(process.pid)], { stdio: "ignore" })
     .on("spawn", () => console.log("Mac はブリッジが動いているあいだ眠らないよ（ふたは開けたまま・電源につないでね）"))

@@ -1086,6 +1086,30 @@ async function openNew(folder) {
     editBackTo = null;
   }
 }
+// くろの直し案（propose_edit）を、編集画面で開く。いまのノートを下に出して、見くらべてから保存してもらう
+async function openProposal(id) {
+  const b = chat.messages.flatMap(m => typeof m.content === "string" ? [] : m.content).find(x => x.type === "tool_use" && x.id === id);
+  if (!b) return;
+  const path = b.input.path.replace(/^\/+/, ""), [folder, file] = path.split("/");
+  if (!TEMPLATE_OF[folder] && folder !== "inbox" || !file?.endsWith(".md")) { alert(`このファイルは直せないよ（${path}）`); return; }
+  if (!WIDE.matches) document.body.classList.remove("chat-open");  // スマホ幅ではチャットを閉じて編集画面を見せる
+  editing = { path, loading: true };
+  closeOverlay();
+  $view.innerHTML = `<p class="empty-note">いまのノートを読んでるよ…</p>`;
+  window.scrollTo(0, 0);
+  try {
+    const f = await readFile(path);
+    if (editing?.path !== path) return;
+    if (!f) throw new Error("ファイルが見つからない");
+    const p = splitFront(b.input.content);
+    editing = { name: file.replace(/\.md$/, ""), folder, path, sha: f.sha, front: p.front || f.front, text: p.body, other: f.body,
+      otherLabel: "いまのノート（くろが直す前）", msg: `くろの直し案だよ${b.input.reason ? `（${b.input.reason}）` : ""}。下のいまのノートと見くらべて、よければ保存してね`, proposal: id };
+    renderEditor();
+  } catch (err) {
+    editing = null;
+    $view.innerHTML = `<p class="empty-note">読めなかった（${esc(err.message)}）</p>`;
+  }
+}
 function renderEditor() {
   const e = editing;
   $view.innerHTML = `
@@ -1097,8 +1121,8 @@ function renderEditor() {
       ${e.front ? `<details class="edit-front"${e.isNew ? " open" : ""}><summary>プロパティ（tags・status など）</summary><textarea id="edit-front" spellcheck="false">${esc(e.front)}</textarea></details>` : ""}
       <textarea id="edit-text" spellcheck="false">${esc(e.text)}</textarea>
       <button class="btn-main" id="edit-save">保存する</button>
-      <div class="form-msg${e.other ? " ng" : ""}" id="edit-msg">${esc(e.msg || "")}</div>
-      ${e.other ? `<details class="edit-other" open><summary>いまの GitHub のノート（ほかで変わったもの）</summary><textarea readonly>${esc(e.other)}</textarea></details>` : ""}
+      <div class="form-msg${e.other && !e.proposal ? " ng" : ""}" id="edit-msg">${esc(e.msg || "")}</div>
+      ${e.other ? `<details class="edit-other" open><summary>${esc(e.otherLabel || "いまの GitHub のノート（ほかで変わったもの）")}</summary><textarea readonly>${esc(e.other)}</textarea></details>` : ""}
     </div>`;
 }
 const editorValues = () => {
@@ -1128,7 +1152,7 @@ async function saveEditor() {
     });
     if (r.status === 409 || (r.status === 422 && !e.isNew)) {  // 読んだあとに、ほかで変わっていた
       const f = await readFile(e.path);
-      Object.assign(e, { sha: f?.sha || null, isNew: !f, text, front, other: f?.body || "", msg: "ほかで変わってたよ。下の最新と見くらべて、書きかけを直してから、もう一度保存してね（このまま保存すると、書きかけで上書きになるよ）" });
+      Object.assign(e, { sha: f?.sha || null, isNew: !f, text, front, other: f?.body || "", otherLabel: "", msg: "ほかで変わってたよ。下の最新と見くらべて、書きかけを直してから、もう一度保存してね（このまま保存すると、書きかけで上書きになるよ）" });
       store.set(`editDraft:${e.path}`, JSON.stringify({ sha: e.sha, text, front }));
       return renderEditor();
     }
@@ -1139,6 +1163,7 @@ async function saveEditor() {
     edits[e.name] = { sha, folder: e.folder, front, body: text, at: Date.now() };
     store.set("noteEdits", JSON.stringify(edits));
     try { localStorage.removeItem(`editDraft:${e.path}`); } catch {}
+    if (e.proposal && chat) { chat.decisions[e.proposal] = "saved"; saveChat(); renderChat(); }
     applyEdits(VAULT);
     closeEditor(e.name, e.folder);
   } catch (err) {
@@ -1308,6 +1333,21 @@ const INBOX_TOOL = {
     },
   },
 };
+// くろの直し案。ブリッジのくろ（Vault を読める）が <edit> の印で出したものを、この形にする。
+// Claude API のくろはノートの中身を読めないので、自分からは使わない。会話の途中でブリッジから API に切りかえたとき、
+// 履歴に残った propose_edit を API が受けつけるように、そのときだけ定義を渡す
+const EDIT_TOOL = {
+  name: "propose_edit",
+  description: "Vault の今あるノートを直す案を出す（ブリッジのくろだけが使う）。呼ぶと画面に「くろの直し案」のボタンが出て、サキちゃんが編集画面で見くらべて保存する（勝手には保存されない）。ノートの中身を読めないときは使わない。",
+  input_schema: {
+    type: "object", additionalProperties: false, required: ["path", "reason", "content"],
+    properties: {
+      path: { type: "string", description: "直すファイルのパス（例: notes/ノート名.md）" },
+      reason: { type: "string", description: "何をどう直したか（短く）" },
+      content: { type: "string", description: "直したあとのファイルの中身ぜんぶ（frontmatter から最後まで）" },
+    },
+  },
+};
 let chat = null, chatBusy = false, chatPics = [];
 // 「くろとおはなし」のつなぎ先: Claude API か、Mac のくろブリッジ（Mac の Claude Code・claude -p）。
 // ブリッジが配っているページ（…/app/。GitHub Pages は /kuro-app/）で開いたときはいつもブリッジ（同じ出どころ）。
@@ -1379,6 +1419,8 @@ function initChat() {
     if (e.target.closest(".bubble [data-note], .bubble [data-day]") && !WIDE.matches) document.body.classList.remove("chat-open");
     const b = e.target.closest("[data-inbox]");
     if (b) decideInbox(b.dataset.inbox, b.dataset.answer === "yes");
+    const pr = e.target.closest("[data-proposal]");
+    if (pr) openProposal(pr.dataset.proposal);
   });
   initChatSplit();
 }
@@ -1463,6 +1505,12 @@ function renderChat() {
           d === "saved" ? `<p class="form-msg ok">inboxに入れたよ</p>` : d === "declined" ? `<p class="form-msg">今回は入れなかったよ</p>` : d === "saving" ? `<p class="form-msg">入れてる…</p>`
           : `<div class="row"><button class="btn" data-inbox="${esc(b.id)}" data-answer="yes">入れる</button><button class="btn" data-inbox="${esc(b.id)}" data-answer="no">やめとく</button></div>`}</div>`);
       }
+      if (b.type === "tool_use" && b.name === "propose_edit") {
+        const d = chat.decisions[b.id];
+        items.push(`<div class="propose"><p>✏️ くろの直し案<br><b>${esc(b.input.path)}</b>${b.input.reason ? `<br><small>${esc(b.input.reason)}</small>` : ""}</p>${
+          d === "saved" ? `<p class="form-msg ok">保存したよ</p>` : d === "declined" ? `<p class="form-msg">今回は直さなかったよ</p>`
+          : `<div class="row"><button class="btn" data-proposal="${esc(b.id)}">編集画面で見る</button></div>`}</div>`);
+      }
     }
     (chat.notes || []).filter(n => n.after === i).forEach(n => items.push(`<div class="bubble note">${esc(n.text)}</div>`));
   });
@@ -1539,7 +1587,8 @@ async function callClaude() {
   if (sonnet) headers["anthropic-beta"] = "server-side-fallback-2026-07-01";  // 断られたときは別のモデルで答え直す
   const body = {
     model, max_tokens: 16000,
-    system: kuroSystem(), messages: chat.messages, tools: [INBOX_TOOL],
+    system: kuroSystem(), messages: chat.messages,
+    tools: chat.messages.some(m => typeof m.content !== "string" && m.content.some(b => b.name === "propose_edit")) ? [INBOX_TOOL, EDIT_TOOL] : [INBOX_TOOL],
     output_config: { effort: "low" },  // おしゃべりなので軽め
     cache_control: { type: "ephemeral" },
   };
@@ -1560,7 +1609,10 @@ async function chatSend() {
   const last = chat.messages[chat.messages.length - 1];
   if (last?.role === "assistant") for (const b of last.content) if (b.type === "tool_use") {
     if (chat.decisions[b.id] !== "saved") chat.decisions[b.id] = "declined";
-    content.push({ type: "tool_result", tool_use_id: b.id, content: chat.decisions[b.id] === "saved" ? "サキちゃんがOKして、inboxに保存した" : "サキちゃんは今回は保存しなかった" });
+    const saved = chat.decisions[b.id] === "saved";
+    content.push({ type: "tool_result", tool_use_id: b.id, content: b.name === "propose_edit"
+      ? (saved ? "サキちゃんが直し案を見て、編集画面で保存した（そのまま、または手直しして）" : "サキちゃんは今回は直さなかった")
+      : (saved ? "サキちゃんがOKして、inboxに保存した" : "サキちゃんは今回は保存しなかった") });
   }
   const pics = chatPics;
   for (const d of pics) content.push({ type: "image", source: { type: "base64", media_type: "image/jpeg", data: d } });
