@@ -119,7 +119,7 @@ const WRITE_RULE = `
 - 書けるのは inbox/ と daily/ の中だけ（Write・Edit）。ほかのフォルダは書けない。消すことも、既存のノートの書き換えもしない
 - 書く前に、何をどこに書くかを一言伝えて「入れとく？」と聞く。サキちゃんが OK と言ってから書く。「日記に書いて」「inboxに入れて」とはっきり頼まれたときは、聞かずに書いていい。雑談の全文は保存しない
 - inbox: inbox/YYYY-MM-DD-タイトル.md を新しく作る（1気づき1ファイル。同じ名前があれば作らず別の名前にする）。先頭に frontmatter（type: inbox / created: YYYY-MM-DD / tags: [くろとおはなし]）、そのあと # タイトル と本文
-- 日記: daily/YYYY-MM-DD.md の「今日あったこと」などの見出しの下に、箇条書きで1〜数行を足す（Edit で追記だけ。今ある文は変えない）。その日のファイルがなければ、先頭に frontmatter（type: daily / date: YYYY-MM-DD / tags: [daily]）と # YYYY-MM-DD、見出し（## 今日あったこと / ## 気づき・学び / ## 相談したこと / ## 明日やること）をつけて作る
+- 日記: daily/YYYY-MM-DD.md の「今日あったこと」などの見出しの下に、箇条書きで1〜数行を足す。Edit の old_string には今ある最後の行をそのまま入れ、new_string は「その行そのまま + 改行 + 新しい行」にする（今ある行を消したり、書きかえたりしない。消えた行があると、ブリッジがコミットしない）。その日のファイルがなければ、先頭に frontmatter（type: daily / date: YYYY-MM-DD / tags: [daily]）と # YYYY-MM-DD、見出し（## 今日あったこと / ## 気づき・学び / ## 相談したこと / ## 明日やること）をつけて作る
 - 事実と気づきを分け、推測で盛らない。パスワード・口座番号・カード番号など機微な情報は書かない。人・ノートに触れたら [[ノート名]] でリンクする
 - 画像をつけて「inboxに入れとく？」と提案するときは、今までどおり返事の最後の <inbox> の印を使う（画像の保存はアプリがやる）
 - 書いたら、どのファイルに何を書いたかを返事で伝える。書けなかったら、そう言う（書いたふりをしない）`;
@@ -171,10 +171,30 @@ async function wroteSince(sinceMs) {
     .filter((f) => { try { return statSync(`${VAULT}/${f}`).mtimeMs >= sinceMs; } catch { return false; } });
 }
 
+// 今ある行を消したり書きかえたりしたファイル（最後のコミットとくらべて、減った行があるもの）。追記だけなら入らない
+async function withRemovedLines(files) {
+  const out = [];
+  for (const f of files) {
+    const r = await git("diff", "--numstat", "HEAD", "--", f);  // 新しいファイル（git にまだない）は出力が空
+    const removed = Number(r.ok ? r.out.split("\t")[1] : 0);
+    if (removed > 0) out.push(f);
+  }
+  return out;
+}
+
 // くろが書いたファイルだけをコミットして push する。うまくいかなくても返事は止めない（ターミナルに出す）
+// 戻り値: サキちゃんに伝えたいこと（あれば）。コミットしなかったときの理由など
 async function commitWrote(files) {
   const branch = (await git("rev-parse", "--abbrev-ref", "HEAD")).out.trim();
-  if (branch !== "main") return console.log(`  コミットしなかった: Vault が main にいない（${branch}）`);
+  if (branch !== "main") return void console.log(`  コミットしなかった: Vault が main にいない（${branch}）`);
+  // 追記だけのはずなので、今ある行が減っていたら、コミットしない（ファイルはそのまま残す。サキちゃんが見て決める）
+  const removed = await withRemovedLines(files);
+  if (removed.length) {
+    console.log(`  コミットしなかった: 今ある行が消えた・変わったファイルがある: ${removed.join(", ")}（見るなら git diff -- ファイル名 / 元に戻すなら git checkout -- ファイル名）`);
+    files = files.filter((f) => !removed.includes(f));
+    var notice = `（ブリッジから: ${removed.join("、")} は、今ある行が変わっていたので、コミットしなかったよ。Mac で見て決めてね）`;
+    if (!files.length) return notice;
+  }
   const names = files.map((f) => f.split("/").pop().replace(/\.md$/, ""));
   const msg = `${files.some((f) => f.startsWith("inbox/")) ? "inbox" : "daily"}: ${names.join("、")}（ブリッジのくろから）`;
   for (const [label, args] of [
@@ -186,10 +206,12 @@ async function commitWrote(files) {
     const r = await git(...args);
     if (!r.ok) {
       if (label === "pull") await git("rebase", "--abort");
-      return console.log(`  ${label} でつまずいた（書いたファイルは Mac に残っている）: ${r.out.trim().slice(0, 300)}`);
+      console.log(`  ${label} でつまずいた（書いたファイルは Mac に残っている）: ${r.out.trim().slice(0, 300)}`);
+      return notice;
     }
   }
   console.log(`  コミットして push した: ${msg}`);
+  return notice;
 }
 
 async function chatClaude({ system, messages, model }) {
@@ -197,6 +219,7 @@ async function chatClaude({ system, messages, model }) {
   const args = ["--system-prompt", String(system || "") + INBOX_RULE + (VAULT_OK ? VAULT_RULE + (WRITABLE ? WRITE_RULE + (AUTO_COMMIT ? COMMIT_RULE : "") : "") : "")];
   if (MODELS.includes(model)) args.push("--model", model);
   const startedAt = Date.now() - 1000;
+  let notice;  // 返事の最後に足す、ブリッジからのお知らせ
   const r = await runClaude(args, chatInput(messages), true, VAULT_OK ? { tools: VAULT_TOOLS, cwd: VAULT } : {});
   // 使った量をターミナルに出す（Pro の枠の使いすぎに気づけるように）
   console.log(`${new Date().toLocaleTimeString("ja-JP")} くろとおはなし: ${(r.ms / 1000).toFixed(1)}秒・約${r.tokens.toLocaleString()}トークン`);
@@ -204,11 +227,13 @@ async function chatClaude({ system, messages, model }) {
     const wrote = await wroteSince(startedAt);
     if (wrote.length) {
       console.log(`  くろが書いた: ${wrote.join(", ")}`);
-      if (AUTO_COMMIT) await commitWrote(wrote);
+      if (AUTO_COMMIT) notice = await commitWrote(wrote);
       else console.log("  （まだコミットしていない）");
     }
   }
-  return { content: toApiContent(r.text), stop_reason: "end_turn", model: r.model, ms: r.ms };
+  const content = toApiContent(r.text);
+  if (notice) content.push({ type: "text", text: notice });
+  return { content, stop_reason: "end_turn", model: r.model, ms: r.ms };
 }
 
 function send(res, status, body, type = "application/json; charset=utf-8") {
