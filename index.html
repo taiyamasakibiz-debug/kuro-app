@@ -998,6 +998,7 @@ function renderChat() {
   const items = [];
   if (!chatReady()) items.push(`<div class="bubble note">「せってい」で ${viaBridge ? "ブリッジの合言葉" : "Claude APIキー"}を入れると、くろとおはなしできるよ</div>`);
   else if (!chat.messages.length) items.push(`<div class="bubble kuro">サキちゃん、なになに？ なんでも話してね🐾</div>`);
+  (chat.notes || []).filter(n => n.after === -1).forEach(n => items.push(`<div class="bubble note">${esc(n.text)}</div>`));  // 最初の1通目が送れなかったとき
   chat.messages.forEach((m, i) => {
     const blocks = typeof m.content === "string" ? [{ type: "text", text: m.content }] : m.content;
     const imgs = blocks.filter(b => b.type === "image");
@@ -1056,11 +1057,18 @@ ${recent || "（まだ読めていない）"}
 
 // ブリッジは Claude API と同じ形（content・stop_reason）で返してくれる
 async function callBridge() {
-  const r = await fetch("/chat", {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-kuro-code": store.get("bridgeCode") },
-    body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel() }),
-  });
+  // Mac が眠っている・ブリッジが止まっていると届かない（アプリの殻はキャッシュから開くので、チャットで初めて気づく）
+  const asleep = "Mac に届かなかった。Mac が寝てるか、ブリッジが止まってるかも";
+  let r;
+  try {
+    r = await fetch("/chat", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-kuro-code": store.get("bridgeCode") },
+      body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel() }),
+      signal: AbortSignal.timeout(150_000),  // ブリッジ側は2分で打ち切るので、それより少し長く待つ
+    });
+  } catch { throw new Error(asleep); }
+  if (r.status === 502 || r.status === 503 || r.status === 504) throw new Error(asleep);  // serve は動いているがブリッジがいない
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`${r.status} ${j.error || ""}`.trim());
   return j;

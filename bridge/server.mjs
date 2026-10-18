@@ -5,6 +5,8 @@
 // - 外から使うときは、ブリッジは 127.0.0.1 のまま、Tailscale の serve を入口にする（https・サキちゃんの機械だけ）:
 //     /Applications/Tailscale.app/Contents/MacOS/Tailscale serve 8787
 //   → https://（Macの名前）.ts.net/app/ で開ける。serve も control+C で止まる
+// - ブリッジが動いているあいだは、Mac が眠らないようにする（caffeinate -i。ブリッジが止まれば一緒に止まる）。
+//   ふたは開けたまま・電源につないで使う。画面は消えてもいい。ふたを閉じると眠る
 // - 起動のたびに6けたの合言葉を作って画面に出す。合言葉がないと聞けない。5回まちがえたら止まる
 // - CLI は改造せずそのまま起動。ログインは Mac の Claude Code のもの（コードにキーは書かない）
 // - ツールは全部オフ（--tools ""）。くろはファイルを読んだり書いたりできない、話すだけ
@@ -160,4 +162,8 @@ createServer(async (req, res) => {
   const base = `http://${HOST === "0.0.0.0" && lan ? lan : HOST}:${PORT}`;
   console.log(`くろブリッジ: ${base}/   くろアプリ: ${base}/app/`);
   console.log(`合言葉: ${CODE}`);
+  // -w: ブリッジ（このプロセス）が終わったら caffeinate も終わる
+  spawn("caffeinate", ["-i", "-w", String(process.pid)], { stdio: "ignore" })
+    .on("spawn", () => console.log("Mac はブリッジが動いているあいだ眠らないよ（ふたは開けたまま・電源につないでね）"))
+    .on("error", () => console.log("caffeinate を起動できなかった。Mac が眠るとくろに届かなくなるよ"));
 });
