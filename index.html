@@ -702,6 +702,13 @@ document.addEventListener("input", e => {
   else if (e.target.id === "memo-text") store.set("draft", e.target.value);
 });
 document.addEventListener("change", async e => {
+  if (e.target.id === "set-chat-via") {  // つなぎ先を切りかえたら、入れる欄（APIキー／ブリッジ）を出しなおす
+    store.set("chatVia", e.target.value);
+    renderSettings();
+    renderChatHead();
+    if (chat && document.body.classList.contains("chat-open")) renderChat();
+    return;
+  }
   if (e.target.id === "set-chat-model") {  // モデルは選んだらすぐ切りかえる（キーを入れ直さなくていい）
     store.set("chatModel", e.target.value);
     const msg = document.getElementById("set-chat-msg");
@@ -908,28 +915,57 @@ function renderSettings() {
       <h3>くろとおはなし</h3>
       <label for="set-chat-model">モデル</label>
       <select id="set-chat-model">${CHAT_MODELS.map(([id, label]) => `<option value="${id}"${id === chatModel() ? " selected" : ""}>${label}</option>`).join("")}</select>
-${viaBridge ? `
+      <label for="set-chat-via">つなぎ先</label>
+      <select id="set-chat-via"${servedByBridge ? " disabled" : ""}>
+        <option value="api"${viaBridge() ? "" : " selected"}>Claude API</option>
+        <option value="bridge"${viaBridge() ? " selected" : ""}>Mac の Claude Code（ブリッジ）</option>
+      </select>
+${viaBridge() ? `${servedByBridge ? "" : `
+      <label for="set-bridge-url">ブリッジのURL（Tailscale の https://〜.ts.net）</label>
+      <input id="set-bridge-url" type="url" value="${esc(store.get("bridgeUrl") || "")}" placeholder="https://（Macの名前）.ts.net" autocapitalize="none" autocorrect="off" spellcheck="false">`}
       <label for="set-chat-key">ブリッジの合言葉（Mac のターミナルに出る6けた）</label>
       <input id="set-chat-key" inputmode="numeric" maxlength="6" placeholder="${store.get("bridgeCode") ? "保存ずみ（変えるときだけ入れる）" : "6けた"}" autocomplete="off">
-      <button class="btn-main" id="set-chat-save">合言葉を保存</button>` : `
+      <button class="btn-main" id="set-chat-save">保存してテスト</button>` : `
       <label for="set-chat-key">Claude APIキー</label>
       <input id="set-chat-key" type="password" placeholder="${store.get("anthropicKey") ? "保存ずみ（変えるときだけ貼る）" : "sk-ant-..."}" autocapitalize="none" autocorrect="off" spellcheck="false">
       <button class="btn-main" id="set-chat-save">キーを保存</button>`}
       <div class="form-msg" id="set-chat-msg"></div>
-      <p class="form-hint">${viaBridge
-        ? "モデルは選ぶとすぐ切りかわるよ。くろは Mac の Claude Code で動くから、APIの料金はかからないかわりに、Claude のプランの枠を使うよ。使った量はブリッジのターミナルに出るよ。合言葉はこの端末の中にだけ保存されるよ。ブリッジを起動するたびに変わるから、起動したら入れ直してね。"
+      <p class="form-hint">${viaBridge()
+        ? `モデルは選ぶとすぐ切りかわるよ。くろは Mac の Claude Code で動くから、APIの料金はかからないかわりに、Claude のプランの枠を使うよ（くろは Vault を読むだけ）。使った量はブリッジのターミナルに出るよ。${servedByBridge ? "" : "Mac でブリッジと Tailscale の入口（serve）を起動して、この端末の Tailscale もオンにしてね。起動していないとつながらないよ。"}URLと合言葉はこの端末の中にだけ保存されるよ。合言葉はブリッジを起動するたびに変わるから、起動したら入れ直してね。`
         : "モデルは選ぶとすぐ切りかわるよ（キーの入れ直しはいらない）。APIキーはこのiPhoneの中にだけ保存されるよ。話した分だけ料金がかかるから、Claude Console で月の上限額を決めておいてね。"}</p>
     </div>`;
 }
-function saveChatSettings() {
+async function saveChatSettings() {
   store.set("chatModel", document.getElementById("set-chat-model").value);
   const key = clean(document.getElementById("set-chat-key").value);
-  if (key) store.set(viaBridge ? "bridgeCode" : "anthropicKey", key);
-  document.getElementById("set-chat-key").value = "";
   const msg = document.getElementById("set-chat-msg");
-  msg.className = chatReady() ? "form-msg ok" : "form-msg ng";
-  msg.textContent = chatReady() ? "保存したよ！右下のくろをタップしてね" : viaBridge ? "合言葉を入れてね" : "APIキーを入れてね";
+  if (!viaBridge()) {
+    if (key) store.set("anthropicKey", key);
+    document.getElementById("set-chat-key").value = "";
+    msg.className = chatReady() ? "form-msg ok" : "form-msg ng";
+    msg.textContent = chatReady() ? "保存したよ！右下のくろをタップしてね" : "APIキーを入れてね";
+    renderChatHead();
+    return;
+  }
+  const urlBox = document.getElementById("set-bridge-url");
+  if (urlBox) store.set("bridgeUrl", clean(urlBox.value).replace(/\/+$/, ""));
+  if (key) store.set("bridgeCode", key);
+  document.getElementById("set-chat-key").value = "";
   renderChatHead();
+  if (!chatReady()) { msg.className = "form-msg ng"; msg.textContent = servedByBridge || store.get("bridgeUrl") ? "合言葉を入れてね" : "ブリッジのURLを入れてね"; return; }
+  msg.className = "form-msg"; msg.textContent = "Mac につないでみてる…";
+  try {
+    const r = await fetch(`${bridgeBase()}/ping`, { headers: { "x-kuro-code": store.get("bridgeCode") }, signal: AbortSignal.timeout(15_000) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.status === 401 ? "合言葉がちがうみたい" : `${r.status} ${j.error || ""}`.trim());
+    msg.className = "form-msg ok";
+    msg.textContent = j.vault ? "つながったよ！Mac のくろは Vault を読めるよ。右下のくろをタップしてね" : "つながったよ！（Mac のくろは話すだけ）右下のくろをタップしてね";
+  } catch (e) {
+    msg.className = "form-msg ng";
+    msg.textContent = e.name === "TypeError" || e.name === "TimeoutError" || e.name === "AbortError"
+      ? "Mac に届かなかった。ブリッジと Tailscale の入口が起動しているか、この端末の Tailscale がオンか、URLが合っているか見てね"
+      : `つながらない：${e.message}`;
+  }
 }
 async function saveSettings() {
   const repo = clean(document.getElementById("set-repo").value), token = clean(document.getElementById("set-token").value);
@@ -973,11 +1009,14 @@ const INBOX_TOOL = {
   },
 };
 let chat = null, chatBusy = false, chatPics = [];
-// 実験（try-claude-cli）: Mac のくろブリッジが配っているページ（…/app/。GitHub Pages は /kuro-app/）で開いたときは、
-// Claude API のかわりに Mac の Claude Code（claude -p）で話す。APIキーはいらない、かわりにブリッジの合言葉
-const viaBridge = location.pathname.startsWith("/app/");
+// 「くろとおはなし」のつなぎ先: Claude API か、Mac のくろブリッジ（Mac の Claude Code・claude -p）。
+// ブリッジが配っているページ（…/app/。GitHub Pages は /kuro-app/）で開いたときはいつもブリッジ（同じ出どころ）。
+// ほかは「せってい」で選ぶ。ブリッジの URL（Tailscale の https://〜.ts.net）はこの端末にだけ保存して、コードには書かない
+const servedByBridge = location.pathname.startsWith("/app/");
+const viaBridge = () => servedByBridge || store.get("chatVia") === "bridge";
+const bridgeBase = () => (servedByBridge ? "" : store.get("bridgeUrl") || "");
 const FINE_POINTER = window.matchMedia("(hover: hover) and (pointer: fine)");  // マウス・トラックパッドの端末（PC）
-const chatReady = () => !!store.get(viaBridge ? "bridgeCode" : "anthropicKey");
+const chatReady = () => viaBridge() ? !!store.get("bridgeCode") && (servedByBridge || !!store.get("bridgeUrl")) : !!store.get("anthropicKey");
 
 function loadChat() {
   const today = jstNow().date;
@@ -1084,7 +1123,7 @@ function fitChat() {
 }
 function renderChatHead() {
   const sub = document.getElementById("chat-sub");
-  if (sub) sub.textContent = `今日は${VAULT ? modeOf(jstNow().date) : ""}モード ・ ${viaBridge ? "Mac の Claude Code ・ " : ""}${CHAT_MODELS.find(m => m[0] === chatModel())[1]}`;
+  if (sub) sub.textContent = `今日は${VAULT ? modeOf(jstNow().date) : ""}モード ・ ${viaBridge() ? "Mac の Claude Code ・ " : ""}${CHAT_MODELS.find(m => m[0] === chatModel())[1]}`;
 }
 
 // くろの返事: 太字・箇条書きなどを表示し、[[ノート名]] はタップで開けるようにする（日付ならその日の日記）。
@@ -1109,7 +1148,7 @@ function renderChat() {
   renderChatHead();
   const log = document.getElementById("chat-log");
   const items = [];
-  if (!chatReady()) items.push(`<div class="bubble note">「せってい」で ${viaBridge ? "ブリッジの合言葉" : "Claude APIキー"}を入れると、くろとおはなしできるよ</div>`);
+  if (!chatReady()) items.push(`<div class="bubble note">「せってい」で ${viaBridge() ? (servedByBridge ? "ブリッジの合言葉" : "ブリッジのURLと合言葉") : "Claude APIキー"}を入れると、くろとおはなしできるよ</div>`);
   else if (!chat.messages.length) items.push(`<div class="bubble kuro">サキちゃん、なになに？ なんでも話してね🐾</div>`);
   (chat.notes || []).filter(n => n.after === -1).forEach(n => items.push(`<div class="bubble note">${esc(n.text)}</div>`));  // 最初の1通目が送れなかったとき
   chat.messages.forEach((m, i) => {
@@ -1174,7 +1213,7 @@ async function callBridge() {
   const asleep = "Mac に届かなかった。Mac が寝てるか、ブリッジが止まってるかも";
   let r;
   try {
-    r = await fetch("/chat", {
+    r = await fetch(`${bridgeBase()}/chat`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-kuro-code": store.get("bridgeCode") },
       body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel() }),
@@ -1188,7 +1227,7 @@ async function callBridge() {
 }
 
 async function callClaude() {
-  if (viaBridge) return callBridge();
+  if (viaBridge()) return callBridge();
   const model = chatModel();
   const sonnet = model.startsWith("claude-sonnet");
   const headers = {

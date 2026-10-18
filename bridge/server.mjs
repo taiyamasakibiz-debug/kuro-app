@@ -20,7 +20,10 @@
 //   /       … テスト画面（test.html）
 //   /app/   … くろアプリそのもの（リポジトリ直下のファイル）。https の GitHub Pages から http のブリッジは呼べないので、
 //             同じ出どころで配って「くろとおはなし」をブリッジ経由にする
+// ホーム画面のくろアプリ（GitHub Pages）からも呼べる: せっていの「つなぎ先」でブリッジを選び、URL に https://（Macの名前）.ts.net を入れる。
+//   そのために ALLOW_ORIGINS（ふつうは GitHub Pages）からの呼び出しを CORS で通す。合言葉と Tailscale の守りはそのまま
 // API:
+//   GET  /ping                             → {ok, vault}（つながるか・合言葉が合っているかの確認）
 //   POST /ask  {prompt}                    → {text, ms, model}
 //   POST /chat {system, messages, model}   → Claude API の Messages と同じ形の {content, stop_reason}
 import { createServer } from "node:http";
@@ -43,6 +46,9 @@ const page = new URL("./test.html", import.meta.url);
 const appRoot = new URL("../", import.meta.url);
 const MODELS = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"];  // アプリのせっていで選べるもの
 const TYPES = { html: "text/html; charset=utf-8", png: "image/png", js: "text/javascript", webmanifest: "application/manifest+json" };
+
+// 別のサイトのうち、呼び出しを通すもの（カンマ区切り）。くろアプリの GitHub Pages
+const ALLOW_ORIGINS = (process.env.ALLOW_ORIGINS || "https://taiyamasakibiz-debug.github.io").split(",").map((s) => s.trim()).filter(Boolean);
 
 const CODE = String(randomInt(0, 1_000_000)).padStart(6, "0");
 let misses = 0;
@@ -159,12 +165,28 @@ createServer(async (req, res) => {
   if (req.method === "GET" && path === "/") return send(res, 200, await readFile(page, "utf8"), "text/html; charset=utf-8");
   if (req.method === "GET" && path === "/app") { res.writeHead(301, { location: "/app/" }); return res.end(); }
   if (req.method === "GET" && path.startsWith("/app/")) return serveApp(res, decodeURIComponent(path.slice(5)));
-  if (req.method !== "POST" || (path !== "/ask" && path !== "/chat")) return send(res, 404, { error: "not found" });
-  // 別のサイトのページから勝手に呼ばれないように、同じ出どころだけ受ける
+  // 別のサイトのページから勝手に呼ばれないように、同じ出どころと ALLOW_ORIGINS だけ受ける
   const origin = req.headers.origin;
-  if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) return send(res, 403, { error: "origin" });
+  const sameSite = !origin || origin === `http://${req.headers.host}` || origin === `https://${req.headers.host}`;
+  if (!sameSite && !ALLOW_ORIGINS.includes(origin)) return send(res, 403, { error: "origin" });
+  if (!sameSite) {
+    res.setHeader("access-control-allow-origin", origin);
+    res.setHeader("vary", "origin");
+  }
+  if (req.method === "OPTIONS") {  // ブラウザの事前確認（合言葉のヘッダーを送ってもいいか）
+    res.writeHead(204, {
+      "access-control-allow-methods": "GET, POST",
+      "access-control-allow-headers": "content-type, x-kuro-code",
+      "access-control-max-age": "600",
+      ...(req.headers["access-control-request-private-network"] ? { "access-control-allow-private-network": "true" } : {}),
+    });
+    return res.end();
+  }
+  const api = (req.method === "POST" && (path === "/ask" || path === "/chat")) || (req.method === "GET" && path === "/ping");
+  if (!api) return send(res, 404, { error: "not found" });
   if (misses >= 5) return send(res, 403, { error: "合言葉を5回まちがえたので止めた。サーバーを起動し直してね" });
   if (req.headers["x-kuro-code"] !== CODE) { misses++; return send(res, 401, { error: "合言葉がちがう" }); }
+  if (path === "/ping") return send(res, 200, { ok: true, vault: VAULT_OK });
   if (busy) return send(res, 429, { error: "くろは今べつの返事を考え中" });
 
   let raw = "";
