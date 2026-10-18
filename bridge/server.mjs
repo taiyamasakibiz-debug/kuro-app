@@ -12,8 +12,10 @@
 // - /ask はツールなし（話すだけ）。/chat は Vault を読める（ステップ①）・inbox と日記には書ける（ステップ②）:
 //   Read・Glob・Grep・Write・Edit だけ渡して、Vault のフォルダで起動する。--restricted でコマンド・ネットの道具を外し、
 //   ファイルの道具を Vault の中に閉じこめる。.git も読まない。書けるのは inbox/ と daily/ の中だけ
-//   （ほかのフォルダへの書きこみは、許可がないので自動で断られる）。消す道具はない。コミット・push はしない
-//   書く道具を外して読むだけに戻すときは WRITABLE=0。Vault の場所は VAULT_DIR で変えられる
+//   （ほかのフォルダへの書きこみは、許可がないので自動で断られる）。消す道具はない
+//   くろが書いたファイル（inbox/ と daily/ のうち、この返事のあいだに変わったものだけ）は、返事のあとにこのサーバーが
+//   コミットして push する（ステップ③）。Vault が main にいるときだけ。くろ自身は git を使えない
+//   自動コミットを止めるときは AUTO_COMMIT=0、書く道具も外して読むだけに戻すときは WRITABLE=0。Vault の場所は VAULT_DIR で変えられる
 // - MCP・設定・CLAUDE.md は読みこまない（--strict-mcp-config --setting-sources ""）。
 //   読みこむと Mac につないだ MCP の説明だけで1回 約15万トークンになり、Pro の枠をすぐ使い切る
 //
@@ -32,7 +34,7 @@ import { spawn, execFile } from "node:child_process";
 import { readFile, readdir } from "node:fs/promises";
 import { randomInt, randomUUID } from "node:crypto";
 import { networkInterfaces, homedir } from "node:os";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 8787);
@@ -42,6 +44,7 @@ const VAULT = process.env.VAULT_DIR || `${homedir()}/Documents/GitHub/kuro-secon
 const VAULT_OK = existsSync(`${VAULT}/CLAUDE.md`);
 // Vault を読む道具（ステップ①）に、inbox と日記だけ書ける道具を足したもの（ステップ②）
 const WRITABLE = process.env.WRITABLE !== "0";
+const AUTO_COMMIT = WRITABLE && process.env.AUTO_COMMIT !== "0";
 const WRITE_DIRS = ["inbox", "daily"];
 const VAULT_TOOLS = ["--restricted", "--tools", WRITABLE ? "Read,Glob,Grep,Write,Edit" : "Read,Glob,Grep", "--permission-mode", "dontAsk",
   "--settings", JSON.stringify({ permissions: {
@@ -121,6 +124,9 @@ const WRITE_RULE = `
 - 画像をつけて「inboxに入れとく？」と提案するときは、今までどおり返事の最後の <inbox> の印を使う（画像の保存はアプリがやる）
 - 書いたら、どのファイルに何を書いたかを返事で伝える。書けなかったら、そう言う（書いたふりをしない）`;
 
+const COMMIT_RULE = `
+- 書いたファイルは、返事のあとに自動でコミット・push される（git は使わなくていい）。アプリの日記に出るのは、朝4時の更新のあと`;
+
 function blockText(b) {
   if (b.type === "text") return b.text;
   if (b.type === "image") return "（画像）";
@@ -152,22 +158,55 @@ function toApiContent(text) {
   return content;
 }
 
-// inbox/ と daily/ の git status（書きこみの前後を比べて、くろが書いたファイルをターミナルに出すため）
-const vaultChanges = () => new Promise((resolve) => {
-  execFile("git", ["status", "--porcelain", "-uall", "--", ...WRITE_DIRS], { cwd: VAULT }, (e, out) => resolve(new Set(e ? [] : out.split("\n").filter(Boolean))));
+// Vault で git を動かす（失敗しても例外にせず、{ ok, out } で返す）
+const git = (...args) => new Promise((resolve) => {
+  execFile("git", args, { cwd: VAULT }, (e, stdout, stderr) => resolve({ ok: !e, out: (stdout || "") + (stderr || "") }));
 });
+
+// この返事のあいだ（sinceMs 以降）に変わった inbox/ と daily/ のファイル（新しいものも含む）
+async function wroteSince(sinceMs) {
+  const r = await git("status", "--porcelain", "-z", "-uall", "--", ...WRITE_DIRS);  // -z: 日本語のファイル名を引用符つきにしない
+  if (!r.ok) return [];
+  return r.out.split("\0").filter(Boolean).map((l) => l.slice(3))
+    .filter((f) => { try { return statSync(`${VAULT}/${f}`).mtimeMs >= sinceMs; } catch { return false; } });
+}
+
+// くろが書いたファイルだけをコミットして push する。うまくいかなくても返事は止めない（ターミナルに出す）
+async function commitWrote(files) {
+  const branch = (await git("rev-parse", "--abbrev-ref", "HEAD")).out.trim();
+  if (branch !== "main") return console.log(`  コミットしなかった: Vault が main にいない（${branch}）`);
+  const names = files.map((f) => f.split("/").pop().replace(/\.md$/, ""));
+  const msg = `${files.some((f) => f.startsWith("inbox/")) ? "inbox" : "daily"}: ${names.join("、")}（ブリッジのくろから）`;
+  for (const [label, args] of [
+    ["add", ["add", "--", ...files]],
+    ["commit", ["commit", "-m", msg, "--", ...files]],
+    ["pull", ["pull", "--rebase", "--autostash", "origin", "main"]],
+    ["push", ["push", "origin", "main"]],
+  ]) {
+    const r = await git(...args);
+    if (!r.ok) {
+      if (label === "pull") await git("rebase", "--abort");
+      return console.log(`  ${label} でつまずいた（書いたファイルは Mac に残っている）: ${r.out.trim().slice(0, 300)}`);
+    }
+  }
+  console.log(`  コミットして push した: ${msg}`);
+}
 
 async function chatClaude({ system, messages, model }) {
   if (!Array.isArray(messages) || !messages.length || messages[messages.length - 1].role !== "user") throw new Error("messages の形がへん");
-  const args = ["--system-prompt", String(system || "") + INBOX_RULE + (VAULT_OK ? VAULT_RULE + (WRITABLE ? WRITE_RULE : "") : "")];
+  const args = ["--system-prompt", String(system || "") + INBOX_RULE + (VAULT_OK ? VAULT_RULE + (WRITABLE ? WRITE_RULE + (AUTO_COMMIT ? COMMIT_RULE : "") : "") : "")];
   if (MODELS.includes(model)) args.push("--model", model);
-  const before = WRITABLE && VAULT_OK ? await vaultChanges() : new Set();
+  const startedAt = Date.now() - 1000;
   const r = await runClaude(args, chatInput(messages), true, VAULT_OK ? { tools: VAULT_TOOLS, cwd: VAULT } : {});
   // 使った量をターミナルに出す（Pro の枠の使いすぎに気づけるように）
   console.log(`${new Date().toLocaleTimeString("ja-JP")} くろとおはなし: ${(r.ms / 1000).toFixed(1)}秒・約${r.tokens.toLocaleString()}トークン`);
   if (WRITABLE && VAULT_OK) {
-    const wrote = [...(await vaultChanges())].filter((l) => !before.has(l));
-    if (wrote.length) console.log(`  くろが書いた: ${wrote.map((l) => l.slice(3)).join(", ")}（まだコミットしていない）`);
+    const wrote = await wroteSince(startedAt);
+    if (wrote.length) {
+      console.log(`  くろが書いた: ${wrote.join(", ")}`);
+      if (AUTO_COMMIT) await commitWrote(wrote);
+      else console.log("  （まだコミットしていない）");
+    }
   }
   return { content: toApiContent(r.text), stop_reason: "end_turn", model: r.model, ms: r.ms };
 }
@@ -232,7 +271,7 @@ createServer(async (req, res) => {
   const base = `http://${HOST === "0.0.0.0" && lan ? lan : HOST}:${PORT}`;
   console.log(`くろブリッジ: ${base}/   くろアプリ: ${base}/app/`);
   console.log(`合言葉: ${CODE}`);
-  console.log(VAULT_OK ? `くろは Vault を読めるよ${WRITABLE ? "（inbox/ と daily/ には書ける。コミット・push はしない）" : "（読むだけ）"}: ${VAULT}` : `Vault が見つからない（${VAULT}）。くろは話すだけ`);
+  console.log(VAULT_OK ? `くろは Vault を読めるよ${WRITABLE ? `（inbox/ と daily/ には書ける${AUTO_COMMIT ? "。書いたら自動でコミット・push する" : "。コミット・push はしない"}）` : "（読むだけ）"}: ${VAULT}` : `Vault が見つからない（${VAULT}）。くろは話すだけ`);
   // -w: ブリッジ（このプロセス）が終わったら caffeinate も終わる
   spawn("caffeinate", ["-i", "-w", String(process.pid)], { stdio: "ignore" })
     .on("spawn", () => console.log("Mac はブリッジが動いているあいだ眠らないよ（ふたは開けたまま・電源につないでね）"))
