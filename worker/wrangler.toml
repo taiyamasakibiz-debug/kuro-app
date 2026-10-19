@@ -1,0 +1,19 @@
+# くろクラウド（Cloudflare Worker）。くわしくは README の「worker/（くろクラウド）」
+# デプロイ: cd worker && npx wrangler deploy
+# キーは secret で入れる（このファイルには書かない）:
+#   npx wrangler secret put ANTHROPIC_API_KEY
+#   npx wrangler secret put GITHUB_TOKEN
+#   npx wrangler secret put KURO_CODE
+#   npx wrangler secret put SHANONE_API_KEY
+#   npx wrangler secret put SHANONE_ORG_ID
+name = "kuro-cloud"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+VAULT_REPO = "taiyamasakibiz-debug/kuro-second-brain"
+ALLOW_ORIGINS = "https://taiyamasakibiz-debug.github.io"
+
+[observability]
+enabled = true

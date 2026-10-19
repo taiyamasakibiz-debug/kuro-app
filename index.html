@@ -1242,10 +1242,16 @@ function renderSettings() {
       <select id="set-chat-model">${CHAT_MODELS.map(([id, label]) => `<option value="${id}"${id === chatModel() ? " selected" : ""}>${label}</option>`).join("")}</select>
       <label for="set-chat-via">つなぎ先</label>
       <select id="set-chat-via"${servedByBridge ? " disabled" : ""}>
-        <option value="api"${viaBridge() ? "" : " selected"}>Claude API</option>
-        <option value="bridge"${viaBridge() ? " selected" : ""}>Mac の Claude Code（ブリッジ）</option>
+        <option value="api"${chatVia() === "api" ? " selected" : ""}>Claude API</option>
+        <option value="bridge"${chatVia() === "bridge" ? " selected" : ""}>Mac の Claude Code（ブリッジ）</option>
+        <option value="cloud"${chatVia() === "cloud" ? " selected" : ""}>Cloudflare（くろクラウド）</option>
       </select>
-${viaBridge() ? `${servedByBridge ? "" : `
+${viaCloud() ? `
+      <label for="set-cloud-url">くろクラウドのURL（https://kuro-cloud.〜.workers.dev）</label>
+      <input id="set-cloud-url" type="url" value="${esc(store.get("cloudUrl") || "")}" placeholder="https://kuro-cloud.（名前）.workers.dev" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <label for="set-chat-key">くろクラウドの合言葉（Cloudflare の KURO_CODE）</label>
+      <input id="set-chat-key" type="password" placeholder="${store.get("cloudCode") ? "保存ずみ（変えるときだけ貼る）" : "24文字以上"}" autocapitalize="none" autocorrect="off" spellcheck="false">
+      <button class="btn-main" id="set-chat-save">保存してテスト</button>` : viaBridge() ? `${servedByBridge ? "" : `
       <label for="set-bridge-url">ブリッジのURL（Tailscale の https://〜.ts.net）</label>
       <input id="set-bridge-url" type="url" value="${esc(store.get("bridgeUrl") || "")}" placeholder="https://（Macの名前）.ts.net" autocapitalize="none" autocorrect="off" spellcheck="false">`}
       <label for="set-chat-key">ブリッジの合言葉（Mac のターミナルに出る6けた）</label>
@@ -1255,7 +1261,9 @@ ${viaBridge() ? `${servedByBridge ? "" : `
       <input id="set-chat-key" type="password" placeholder="${store.get("anthropicKey") ? "保存ずみ（変えるときだけ貼る）" : "sk-ant-..."}" autocapitalize="none" autocorrect="off" spellcheck="false">
       <button class="btn-main" id="set-chat-save">キーを保存</button>`}
       <div class="form-msg" id="set-chat-msg"></div>
-      <p class="form-hint">${viaBridge()
+      <p class="form-hint">${viaCloud()
+        ? "モデルは選ぶとすぐ切りかわるよ。くろは Cloudflare で動くから、Mac が寝ていても話せるよ。Vault を読めて、inbox・日記・ノートに足せる（今ある文は変えられない）。Shanone をつないでいればネット検索もできるよ。Claude API の料金がかかるから、Claude Console で月の上限額を決めておいてね。キーはぜんぶ Cloudflare に入っていて、この端末にはURLと合言葉だけ保存されるよ。"
+        : viaBridge()
         ? `モデルは選ぶとすぐ切りかわるよ。くろは Mac の Claude Code で動くから、APIの料金はかからないかわりに、Claude のプランの枠を使うよ（くろは Vault を読むだけ）。使った量はブリッジのターミナルに出るよ。${servedByBridge ? "" : "Mac でブリッジと Tailscale の入口（serve）を起動して、この端末の Tailscale もオンにしてね。起動していないとつながらないよ。"}URLと合言葉はこの端末の中にだけ保存されるよ。合言葉はブリッジを起動するたびに変わるから、起動したら入れ直してね。`
         : "モデルは選ぶとすぐ切りかわるよ（キーの入れ直しはいらない）。APIキーはこのiPhoneの中にだけ保存されるよ。話した分だけ料金がかかるから、Claude Console で月の上限額を決めておいてね。"}</p>
     </div>`;
@@ -1264,6 +1272,7 @@ async function saveChatSettings() {
   store.set("chatModel", document.getElementById("set-chat-model").value);
   const key = clean(document.getElementById("set-chat-key").value);
   const msg = document.getElementById("set-chat-msg");
+  if (viaCloud()) return saveCloudSettings(key, msg);
   if (!viaBridge()) {
     if (key) store.set("anthropicKey", key);
     document.getElementById("set-chat-key").value = "";
@@ -1290,6 +1299,24 @@ async function saveChatSettings() {
     msg.textContent = e.name === "TypeError" || e.name === "TimeoutError" || e.name === "AbortError"
       ? "Mac に届かなかった。ブリッジと Tailscale の入口が起動しているか、この端末の Tailscale がオンか、URLが合っているか見てね"
       : `つながらない：${e.message}`;
+  }
+}
+async function saveCloudSettings(key, msg) {
+  store.set("cloudUrl", clean(document.getElementById("set-cloud-url").value).replace(/\/+$/, ""));
+  if (key) store.set("cloudCode", key);
+  document.getElementById("set-chat-key").value = "";
+  renderChatHead();
+  if (!chatReady()) { msg.className = "form-msg ng"; msg.textContent = store.get("cloudUrl") ? "合言葉を入れてね" : "くろクラウドのURLを入れてね"; return; }
+  msg.className = "form-msg"; msg.textContent = "くろクラウドにつないでみてる…";
+  try {
+    const r = await fetch(`${relayBase()}/ping`, { headers: { "x-kuro-code": relayCode() }, signal: AbortSignal.timeout(15_000) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(r.status === 401 ? "合言葉がちがうみたい" : `${r.status} ${j.error || ""}`.trim());
+    msg.className = "form-msg ok";
+    msg.textContent = `つながったよ！くろクラウドのくろは Vault を読み書きできるよ${j.search ? "。ネット検索もできる" : "（ネット検索はまだ。Shanone のキーを入れると使える）"}。右下のくろをタップしてね`;
+  } catch (e) {
+    msg.className = "form-msg ng";
+    msg.textContent = e.name === "TypeError" || e.name === "TimeoutError" || e.name === "AbortError" ? "くろクラウドに届かなかった。URLが合っているか見てね" : `つながらない：${e.message}`;
   }
 }
 async function saveSettings() {
@@ -1352,11 +1379,17 @@ let chat = null, chatBusy = false, chatPics = [];
 // 「くろとおはなし」のつなぎ先: Claude API か、Mac のくろブリッジ（Mac の Claude Code・claude -p）。
 // ブリッジが配っているページ（…/app/。GitHub Pages は /kuro-app/）で開いたときはいつもブリッジ（同じ出どころ）。
 // ほかは「せってい」で選ぶ。ブリッジの URL（Tailscale の https://〜.ts.net）はこの端末にだけ保存して、コードには書かない
+// くろクラウド（Cloudflare Worker・worker/）もブリッジと同じ形で呼べる。URL と合言葉はこの端末にだけ保存
 const servedByBridge = location.pathname.startsWith("/app/");
-const viaBridge = () => servedByBridge || store.get("chatVia") === "bridge";
+const chatVia = () => servedByBridge ? "bridge" : ["bridge", "cloud"].includes(store.get("chatVia")) ? store.get("chatVia") : "api";
+const viaBridge = () => chatVia() === "bridge";
+const viaCloud = () => chatVia() === "cloud";
 const bridgeBase = () => (servedByBridge ? "" : store.get("bridgeUrl") || "");
+const relayBase = () => (viaCloud() ? store.get("cloudUrl") || "" : bridgeBase());
+const relayCode = () => store.get(viaCloud() ? "cloudCode" : "bridgeCode");
 const FINE_POINTER = window.matchMedia("(hover: hover) and (pointer: fine)");  // マウス・トラックパッドの端末（PC）
-const chatReady = () => viaBridge() ? !!store.get("bridgeCode") && (servedByBridge || !!store.get("bridgeUrl")) : !!store.get("anthropicKey");
+const chatReady = () => viaCloud() ? !!store.get("cloudCode") && !!store.get("cloudUrl")
+  : viaBridge() ? !!store.get("bridgeCode") && (servedByBridge || !!store.get("bridgeUrl")) : !!store.get("anthropicKey");
 
 function loadChat() {
   const today = jstNow().date;
@@ -1465,7 +1498,7 @@ function fitChat() {
 }
 function renderChatHead() {
   const sub = document.getElementById("chat-sub");
-  if (sub) sub.textContent = `今日は${VAULT ? modeOf(jstNow().date) : ""}モード ・ ${viaBridge() ? "Mac の Claude Code ・ " : ""}${CHAT_MODELS.find(m => m[0] === chatModel())[1]}`;
+  if (sub) sub.textContent = `今日は${VAULT ? modeOf(jstNow().date) : ""}モード ・ ${viaCloud() ? "くろクラウド ・ " : viaBridge() ? "Mac の Claude Code ・ " : ""}${CHAT_MODELS.find(m => m[0] === chatModel())[1]}`;
 }
 
 // くろの返事: 太字・箇条書きなどを表示し、[[ノート名]] はタップで開けるようにする（日付ならその日の日記）。
@@ -1490,7 +1523,7 @@ function renderChat() {
   renderChatHead();
   const log = document.getElementById("chat-log");
   const items = [];
-  if (!chatReady()) items.push(`<div class="bubble note">「せってい」で ${viaBridge() ? (servedByBridge ? "ブリッジの合言葉" : "ブリッジのURLと合言葉") : "Claude APIキー"}を入れると、くろとおはなしできるよ</div>`);
+  if (!chatReady()) items.push(`<div class="bubble note">「せってい」で ${viaCloud() ? "くろクラウドのURLと合言葉" : viaBridge() ? (servedByBridge ? "ブリッジの合言葉" : "ブリッジのURLと合言葉") : "Claude APIキー"}を入れると、くろとおはなしできるよ</div>`);
   else if (!chat.messages.length) items.push(`<div class="bubble kuro">サキちゃん、なになに？ なんでも話してね🐾</div>`);
   (chat.notes || []).filter(n => n.after === -1).forEach(n => items.push(`<div class="bubble note">${esc(n.text)}</div>`));  // 最初の1通目が送れなかったとき
   chat.messages.forEach((m, i) => {
@@ -1555,27 +1588,27 @@ ${recent || "（まだ読めていない）"}
 返事は必ずタメ口（敬語なし）で、サキちゃんと呼び、短めに。`;
 }
 
-// ブリッジは Claude API と同じ形（content・stop_reason）で返してくれる
+// ブリッジもくろクラウドも Claude API と同じ形（content・stop_reason）で返してくれる
 async function callBridge() {
   // Mac が眠っている・ブリッジが止まっていると届かない（アプリの殻はキャッシュから開くので、チャットで初めて気づく）
-  const asleep = "Mac に届かなかった。Mac が寝てるか、ブリッジが止まってるかも";
+  const asleep = viaCloud() ? "くろクラウドに届かなかった。電波か、「せってい」のURLを見てね" : "Mac に届かなかった。Mac が寝てるか、ブリッジが止まってるかも";
   let r;
   try {
-    r = await fetch(`${bridgeBase()}/chat`, {
+    r = await fetch(`${relayBase()}/chat`, {
       method: "POST",
-      headers: { "content-type": "application/json", "x-kuro-code": store.get("bridgeCode") },
+      headers: { "content-type": "application/json", "x-kuro-code": relayCode() },
       body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel() }),
-      signal: AbortSignal.timeout(210_000),  // ブリッジ側は3分で打ち切るので、それより少し長く待つ
+      signal: AbortSignal.timeout(210_000),  // ブリッジ側は3分で打ち切るので、それより少し長く待つ（くろクラウドも同じだけ待つ）
     });
   } catch { throw new Error(asleep); }
-  if (r.status === 502 || r.status === 503 || r.status === 504) throw new Error(asleep);  // serve は動いているがブリッジがいない
+  if (!viaCloud() && (r.status === 502 || r.status === 503 || r.status === 504)) throw new Error(asleep);  // serve は動いているがブリッジがいない
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(`${r.status} ${j.error || ""}`.trim());
   return j;
 }
 
 async function callClaude() {
-  if (viaBridge()) return callBridge();
+  if (viaBridge() || viaCloud()) return callBridge();
   const model = chatModel();
   const sonnet = model.startsWith("claude-sonnet");
   const headers = {
