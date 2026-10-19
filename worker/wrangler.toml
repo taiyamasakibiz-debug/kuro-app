@@ -15,6 +15,8 @@ preview_urls = false  # 版ごとの別URL（プレビュー）は作らない�
 [vars]
 VAULT_REPO = "taiyamasakibiz-debug/kuro-second-brain"
 ALLOW_ORIGINS = "https://taiyamasakibiz-debug.github.io"
+# Shanone の入口（既定は .mcp.json と同じ開発版）。キーと入口はセットで合わせる
+SHANONE_URL = "https://dev-akaso-mcp.shanone.ai/mcp"
 
 [observability]
 enabled = true

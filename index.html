@@ -1312,6 +1312,7 @@ async function saveCloudSettings(key, msg) {
     const r = await fetch(`${relayBase()}/ping`, { headers: { "x-kuro-code": relayCode() }, signal: AbortSignal.timeout(15_000) });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(r.status === 401 ? "合言葉がちがうみたい" : `${r.status} ${j.error || ""}`.trim());
+    if (!j.vault) throw new Error("合言葉は合ってるけど、Cloudflare に ANTHROPIC_API_KEY か GITHUB_TOKEN がまだ入っていないみたい");
     msg.className = "form-msg ok";
     msg.textContent = `つながったよ！くろクラウドのくろは Vault を読み書きできるよ${j.search ? "。ネット検索もできる" : "（ネット検索はまだ。Shanone のキーを入れると使える）"}。右下のくろをタップしてね`;
   } catch (e) {

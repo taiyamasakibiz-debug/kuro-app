@@ -374,6 +374,8 @@ const fromB64 = (b) => new TextDecoder().decode(Uint8Array.from(atob(b.replace(/
 
 /* ---- ネット検索（Shanone の MCP。くろに渡すのは SHANONE_TOOLS だけ）----
    Shanone は Authorization のほかに X-Org-Id のヘッダーがいるので、Claude API の MCP 接続ではなく、ここから呼ぶ */
+// 入口は Vault の .mcp.json と同じ開発版（dev-akaso）。キーはこの入口用のもの（SHANONE_DEV_API_KEY・SHANONE_DEV_ORG_ID と同じ）を入れる。
+// 別の入口のキーを使うときは、vars の SHANONE_URL で入口を変える
 const SHANONE_URL = "https://dev-akaso-mcp.shanone.ai/mcp";
 
 async function mcp(env, session, method, params, id) {
@@ -381,12 +383,13 @@ async function mcp(env, session, method, params, id) {
     method: "POST",
     headers: {
       "content-type": "application/json", accept: "application/json, text/event-stream",
-      authorization: `Bearer ${env.SHANONE_API_KEY}`, "x-org-id": env.SHANONE_ORG_ID, "x-source-host": "kuro-cloud",
+      authorization: `Bearer ${env.SHANONE_API_KEY}`, "x-org-id": env.SHANONE_ORG_ID, "x-source-host": env.SHANONE_SOURCE_HOST || "kuro-cloud",
       ...(session ? { "mcp-session-id": session } : {}),
     },
     body: JSON.stringify({ jsonrpc: "2.0", method, ...(params ? { params } : {}), ...(id ? { id } : {}) }),
   });
-  if (!r.ok) throw new Error(`Shanone ${r.status}`);
+  // 断られたときは、Shanone の返事の文も少しそえる（どこで断られたか見分けられるように。キーは返事に入らない）
+  if (!r.ok) throw new Error(`Shanone ${r.status} ${(await r.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200)}`.trim());
   const sid = r.headers.get("mcp-session-id") || session;
   if (!id) return { session: sid };
   const raw = await r.text();
