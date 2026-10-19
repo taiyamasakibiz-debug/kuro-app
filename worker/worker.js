@@ -201,6 +201,7 @@ async function chat(env, { system, messages, model }) {
         if (out.wrote) wrote.push(out.wrote);
         results.push({ type: "tool_result", tool_use_id: b.id, content: out.text });
       } catch (e) {
+        console.log(`  道具 ${b.name} でつまずいた: ${e.message}`);  // ダッシュボードの Logs / wrangler tail で見られる（キーは入らない）
         results.push({ type: "tool_result", tool_use_id: b.id, content: e.message, is_error: true });
       }
     }
