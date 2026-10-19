@@ -383,14 +383,15 @@ async function mcp(env, session, method, params, id) {
   const r = await fetch(env.SHANONE_URL || SHANONE_URL, {
     method: "POST",
     headers: {
-      "content-type": "application/json", accept: "application/json, text/event-stream",
+      // Worker の fetch は User-Agent を付けない。Shanone の前の AWS（CloudFront の守り）は、User-Agent のない呼び出しを 403 で断ることがあるので付ける
+      "content-type": "application/json", accept: "application/json, text/event-stream", "user-agent": "kuro-cloud/1.0",
       authorization: `Bearer ${env.SHANONE_API_KEY}`, "x-org-id": env.SHANONE_ORG_ID, "x-source-host": env.SHANONE_SOURCE_HOST || "kuro-cloud",
       ...(session ? { "mcp-session-id": session } : {}),
     },
     body: JSON.stringify({ jsonrpc: "2.0", method, ...(params ? { params } : {}), ...(id ? { id } : {}) }),
   });
   // 断られたときは、Shanone の返事の文も少しそえる（どこで断られたか見分けられるように。キーは返事に入らない）
-  if (!r.ok) throw new Error(`Shanone ${r.status} ${(await r.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 200)}`.trim());
+  if (!r.ok) throw new Error(`Shanone ${r.status} ${(await r.text().catch(() => "")).replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300)}`.trim());
   const sid = r.headers.get("mcp-session-id") || session;
   if (!id) return { session: sid };
   const raw = await r.text();
