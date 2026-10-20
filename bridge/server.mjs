@@ -105,7 +105,12 @@ const INBOX_RULE = `
 # inboxに入れとく？の提案のしかた（この画面だけのきまり）
 save_to_inbox ツールは使えない。かわりに、提案したいときだけ、返事の最後に次の形を1つだけ書く（毎回はしない）:
 <inbox title="短いタイトル（20文字以内・日付は入れない）" images="true か false">ノートの本文。サキちゃんの言葉は要約しつつ、事実と気づきを分けて書く。推測で盛らない</inbox>
-images は、サキちゃんが直前に貼った画像も一緒に残すなら true。この印は画面では「inboxに入れとく？」のボタンになる。`;
+images は、サキちゃんが直前に貼った画像も一緒に残すなら true。この印は画面では「inboxに入れとく？」のボタンになる。
+
+画像を日記や今あるノートに貼りたいとき（サキちゃんが画像を貼って「日記に」「〇〇のノートに」と言ったとき）は、返事の最後に次のどちらかを1つだけ書く:
+<diary date="YYYY-MM-DD（ふだんは今日）" title="画像のファイル名になる短いタイトル" images="true">日記の「今日あったこと」に足す箇条書き</diary>
+<note name="ノート名（フォルダ名や .md なし）" section="## 足す先の見出し（末尾なら空）" title="画像のファイル名になる短いタイトル" images="true">ノートに足す文章（画像だけなら空）</note>
+画面では「日記に入れとく？」「ノートに足しとく？」のボタンになり、サキちゃんがOKしたらアプリが画像を保存して ![[画像]] つきで足す。画像の埋め込みは自分で書かない。新しいノートは作れない。`;
 
 const VAULT_RULE = `
 
@@ -128,7 +133,7 @@ Write・Edit で書けるのは inbox/ daily/ notes/ people/ projects/ shops/ ku
 - 新しいノートは templates/ のひな形（daily.md・note.md・person.md・project.md・shop.md・kuro.md）を Read して、その形で作る（{{date:YYYY-MM-DD}} は今日の日付、{{title}} はノート名）。inbox は inbox/YYYY-MM-DD-タイトル.md（frontmatter は type: inbox / created / tags: [くろとおはなし]）。同じ名前のファイルがあれば作らない
 - 日記は daily/YYYY-MM-DD.md の「今日あったこと」などの見出しの下に、箇条書きで足す。その日のファイルがなければ templates/daily.md の形で作る
 - 事実と気づきを分け、推測で盛らない。パスワード・口座番号・カード番号など機微な情報は書かない。人・ノートに触れたら [[ノート名]] でリンクする
-- 画像をつけて「inboxに入れとく？」と提案するときは、今までどおり返事の最後の <inbox> の印を使う（画像の保存はアプリがやる）
+- 画像をつけて残すときは、今までどおり返事の最後の <inbox>・<diary>・<note> の印を使う（画像の保存はアプリがやる）
 - 書いたら、どのファイルに何を書いたかを返事で伝える。書けなかったら、そう言う（書いたふりをしない）
 
 # 今ある文を直したいとき（直し案）
@@ -145,6 +150,8 @@ function blockText(b) {
   if (b.type === "text") return b.text;
   if (b.type === "image") return "（画像）";
   if (b.type === "tool_use" && b.name === "save_to_inbox") return `（くろが「inboxに入れとく？」と提案: ${b.input?.title || ""}）`;
+  if (b.type === "tool_use" && b.name === "add_to_diary") return `（くろが「日記に入れとく？」と提案: ${b.input?.date || ""}）`;
+  if (b.type === "tool_use" && b.name === "add_to_note") return `（くろが「ノートに足しとく？」と提案: ${b.input?.note || ""}）`;
   if (b.type === "tool_use" && b.name === "propose_edit") return `（くろが直し案を出した: ${b.input?.path || ""} ${b.input?.reason || ""}）`;
   if (b.type === "tool_result") return `（さっきの提案の結果: ${typeof b.content === "string" ? b.content : ""}）`;
   return "";
@@ -164,7 +171,7 @@ function chatInput(messages) {
   return JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n";
 }
 
-// 返事の最後の印（<inbox> と <edit>）を、アプリの tool_use の形に直す
+// 返事の最後の印（<inbox>・<diary>・<note>・<edit>）を、アプリの tool_use の形に直す
 function toApiContent(text) {
   const tools = [];
   const take = (re, make) => {
@@ -175,6 +182,11 @@ function toApiContent(text) {
   };
   take(/<inbox\s+title="([^"]*)"\s+images="(true|false)"\s*>([\s\S]*?)<\/inbox>/,
     (m) => ({ name: "save_to_inbox", input: { title: m[1], body: m[3].trim(), attach_images: m[2] === "true" } }));
+  const attr = (a, k) => (a.match(new RegExp(`${k}="([^"]*)"`)) || [])[1] || "";
+  take(/<diary\b([^>]*)>([\s\S]*?)<\/diary>/, (m) => ({ name: "add_to_diary",
+    input: { date: attr(m[1], "date"), title: attr(m[1], "title"), body: m[2].trim(), attach_images: attr(m[1], "images") !== "false" } }));
+  take(/<note\b([^>]*)>([\s\S]*?)<\/note>/, (m) => ({ name: "add_to_note",
+    input: { note: attr(m[1], "name"), section: attr(m[1], "section"), title: attr(m[1], "title"), body: m[2].trim(), attach_images: attr(m[1], "images") !== "false" } }));
   take(/<edit\s+path="([^"]*)"(?:\s+reason="([^"]*)")?\s*>\n?([\s\S]*?)<\/edit>/,
     (m) => ({ name: "propose_edit", input: { path: m[1].trim(), reason: (m[2] || "").trim(), content: m[3].replace(/\s+$/, "") + "\n" } }));
   text = text.trim();

@@ -1481,6 +1481,35 @@ const INBOX_TOOL = {
     },
   },
 };
+const DIARY_TOOL = {
+  name: "add_to_diary",
+  description: "サキちゃんが「日記に書いて」「日記に入れて」と言ったとき、または話の中で今日の出来事として日記に残したいことが出たときに、日記（daily/）に追記することを提案する。サキちゃんが貼った画像も日記に貼るなら attach_images を true にする（直前に画像を貼った発言の画像が attachments に保存され、日記に貼られる）。呼ぶと画面に「日記に入れとく？」のボタンが出て、サキちゃんがOKしたときだけ「## 今日あったこと」の最後に追記される。勝手には保存されない。",
+  strict: true,
+  input_schema: {
+    type: "object", additionalProperties: false, required: ["date", "title", "body", "attach_images"],
+    properties: {
+      date: { type: "string", description: "日記の日付（YYYY-MM-DD）。今日のことなら今日の日付。昨日以前のことを書き足したいと言われたときだけ、その日にする" },
+      title: { type: "string", description: "画像のファイル名になる短いタイトル（日本語、20文字以内）。日付は自動でつくので入れない" },
+      body: { type: "string", description: "日記に足す文章。「- 」で始まる箇条書き1〜3行。サキちゃんの言葉は要約しつつ、事実と気づきを分けて書く。推測で盛らない。画像の埋め込みは自動で足されるので書かない" },
+      attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像も日記に貼るなら true" },
+    },
+  },
+};
+const NOTE_TOOL = {
+  name: "add_to_note",
+  description: "サキちゃんが「〇〇のノートに足して」「この写真を〇〇に貼って」と言ったとき、今あるノート（日記以外）に文章や画像を追記することを提案する。ノート名は資料の「ノートの一覧」にあるものだけ。新しいノートは作れない（日記は add_to_diary）。呼ぶと画面に「ノートに足しとく？」のボタンが出て、サキちゃんがOKしたときだけ追記される。勝手には保存されない。",
+  strict: true,
+  input_schema: {
+    type: "object", additionalProperties: false, required: ["note", "section", "title", "body", "attach_images"],
+    properties: {
+      note: { type: "string", description: "足す先のノート名（「ノートの一覧」のとおり。フォルダ名や .md はつけない）" },
+      section: { type: "string", description: "足す先の見出し（例: ## 行った記録）。その見出しの節の最後に足す。ない見出しなら末尾に見出しごと足す。末尾でいいときは空文字" },
+      title: { type: "string", description: "画像のファイル名になる短いタイトル（日本語、20文字以内）。日付は自動でつくので入れない" },
+      body: { type: "string", description: "ノートに足す文章（短く。日付が大事なら「- 2026-10-20 …」の形）。サキちゃんの言葉は要約しつつ、推測で盛らない。画像の埋め込みは自動で足されるので書かない。画像だけなら空文字" },
+      attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像もノートに貼るなら true" },
+    },
+  },
+};
 // くろの直し案。ブリッジのくろ（Vault を読める）が <edit> の印で出したものを、この形にする。
 // Claude API のくろはノートの中身を読めないので、自分からは使わない。会話の途中でブリッジから API に切りかえたとき、
 // 履歴に残った propose_edit を API が受けつけるように、そのときだけ定義を渡す
@@ -1573,6 +1602,8 @@ function initChat() {
     if (e.target.closest(".bubble [data-note], .bubble [data-day]") && !WIDE.matches) document.body.classList.remove("chat-open");
     const b = e.target.closest("[data-inbox]");
     if (b) decideInbox(b.dataset.inbox, b.dataset.answer === "yes");
+    const dy = e.target.closest("[data-diary]");
+    if (dy) decideAppend(dy.dataset.diary, dy.dataset.answer === "yes");
     const pr = e.target.closest("[data-proposal]");
     if (pr) openProposal(pr.dataset.proposal);
   });
@@ -1659,6 +1690,13 @@ function renderChat() {
           d === "saved" ? `<p class="form-msg ok">inboxに入れたよ</p>` : d === "declined" ? `<p class="form-msg">今回は入れなかったよ</p>` : d === "saving" ? `<p class="form-msg">入れてる…</p>`
           : `<div class="row"><button class="btn" data-inbox="${esc(b.id)}" data-answer="yes">入れる</button><button class="btn" data-inbox="${esc(b.id)}" data-answer="no">やめとく</button></div>`}</div>`);
       }
+      if (b.type === "tool_use" && (b.name === "add_to_diary" || b.name === "add_to_note")) {
+        const d = chat.decisions[b.id], diary = b.name === "add_to_diary";
+        items.push(`<div class="propose"><p>${diary ? "📔 日記に入れとく？" : "📎 ノートに足しとく？"}<br><b>${esc(diary ? b.input.date : b.input.note)}</b>${!diary && b.input.section ? ` <small>${esc(b.input.section)}</small>` : ""}${
+          b.input.attach_images ? " <small>（画像つき）</small>" : ""}<br><small>${esc(b.input.body.trim())}</small></p>${
+          d === "saved" ? `<p class="form-msg ok">${diary ? "日記に入れた" : "ノートに足した"}よ</p>` : d === "declined" ? `<p class="form-msg">今回は入れなかったよ</p>` : d === "saving" ? `<p class="form-msg">入れてる…</p>`
+          : `<div class="row"><button class="btn" data-diary="${esc(b.id)}" data-answer="yes">入れる</button><button class="btn" data-diary="${esc(b.id)}" data-answer="no">やめとく</button></div>`}</div>`);
+      }
       if (b.type === "tool_use" && b.name === "propose_edit") {
         const d = chat.decisions[b.id];
         items.push(`<div class="propose"><p>✏️ くろの直し案<br><b>${esc(b.input.path)}</b>${b.input.reason ? `<br><small>${esc(b.input.reason)}</small>` : ""}</p>${
@@ -1678,6 +1716,9 @@ function kuroSystem() {
   const mode = VAULT ? modeOf(date) : "";
   const note = name => (VAULT?.notes[name]?.body || "").slice(0, 8000);
   const recent = (VAULT?.days || []).slice(0, 3).map(d => `${d.date}（くろのきげん: ${d.mode}）\n` + d.lines.slice(0, 8).map(l => `- ${l}`).join("\n")).join("\n\n");
+  const byFolder = {};
+  for (const [name, n] of Object.entries(VAULT?.notes || {})) if (appendTarget(name)) (byFolder[n.folder] ||= []).push(name);
+  const notesList = Object.entries(byFolder).map(([f, names]) => `${f}: ${names.sort().join(" / ")}`).join("\n");
   // 変わりにくい部分を先、日付や最近の日記を後ろに（プロンプトキャッシュが効くように）
   return `あなたは「くろ」。サキちゃんのセカンドブレイン（Obsidian の Vault）にいる相棒で、職場の活発で優秀な後輩の女の子みたいなAI。今はサキちゃんのiPhoneの「くろアプリ」の中でおしゃべりしている。
 
@@ -1690,6 +1731,8 @@ function kuroSystem() {
 - 今日のモードのふるまいで話す。ただしサキちゃんが落ち込んでいたり、真面目な相談のときは、モードより真剣に寄り添う
 - 下の資料に書いていないサキちゃんのことを、推測で決めつけない。知らないことは聞く
 - 面白い気づきや残す価値のある話が出たら、save_to_inbox で「inboxに入れとく？」と提案してよい（毎回はしない）
+- サキちゃんが「日記に書いて」「日記にして」と言ったら、add_to_diary で日記への追記を提案する（画像を貼っていたら attach_images を true に）。inbox に入れるか日記に入れるかは、サキちゃんの言い方に合わせる
+- サキちゃんが今あるノート（お店・人・プロジェクトなど）に足してと言ったら、add_to_note で追記を提案する（画像を貼っていたら attach_images を true に）。ノート名は下の「ノートの一覧」から選ぶ。見出しが分からなければ section は空にする（推測で見出しを作らない）
 - サキちゃんは写真や画像を貼ることがある。見えたものを素直に話し、写っていないことを推測で盛らない
 
 # くろのプロフィール（Vault より）
@@ -1698,6 +1741,9 @@ ${note("くろのプロフィール")}
 
 # サキちゃんのプロフィール（Vault より）
 ${note("サキちゃんのプロフィール")}
+
+# ノートの一覧（add_to_note で使える名前。フォルダごと）
+${notesList || "（まだ読めていない）"}
 
 # 今日
 ${date}。今日のくろは「${mode}」モード（日付 ÷ 6 の余りで決まる）
@@ -1742,7 +1788,7 @@ async function callClaude() {
   const body = {
     model, max_tokens: 16000,
     system: kuroSystem(), messages: chat.messages,
-    tools: chat.messages.some(m => typeof m.content !== "string" && m.content.some(b => b.name === "propose_edit")) ? [INBOX_TOOL, EDIT_TOOL] : [INBOX_TOOL],
+    tools: chat.messages.some(m => typeof m.content !== "string" && m.content.some(b => b.name === "propose_edit")) ? [INBOX_TOOL, DIARY_TOOL, NOTE_TOOL, EDIT_TOOL] : [INBOX_TOOL, DIARY_TOOL, NOTE_TOOL],
     output_config: { effort: "low" },  // おしゃべりなので軽め
     cache_control: { type: "ephemeral" },
   };
@@ -1766,6 +1812,8 @@ async function chatSend() {
     const saved = chat.decisions[b.id] === "saved";
     content.push({ type: "tool_result", tool_use_id: b.id, content: b.name === "propose_edit"
       ? (saved ? "サキちゃんが直し案を見て、編集画面で保存した（そのまま、または手直しして）" : "サキちゃんは今回は直さなかった")
+      : b.name === "add_to_diary" ? (saved ? "サキちゃんがOKして、日記に追記した" : "サキちゃんは今回は日記に入れなかった")
+      : b.name === "add_to_note" ? (saved ? "サキちゃんがOKして、ノートに追記した" : "サキちゃんは今回はノートに足さなかった")
       : (saved ? "サキちゃんがOKして、inboxに保存した" : "サキちゃんは今回は保存しなかった") });
   }
   const pics = chatPics;
@@ -1813,6 +1861,86 @@ async function decideInbox(id, yes) {
   } catch (e) {
     delete chat.decisions[id];
     chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text: `inboxに入れられなかった（${e.message}）。「せってい」のGitHubトークンを確認してね` });
+  }
+  saveChat(); renderChat();
+}
+
+// 見出しの節の最後に足す。heading が空なら末尾に。見出しが見つからなければ末尾に見出しごと足す
+function addToSection(text, heading, add) {
+  const lines = text.replace(/\s+$/, "").split("\n");
+  const at = heading ? lines.findIndex(l => l.trim() === heading) : -1;
+  if (at < 0) return `${lines.join("\n")}\n\n${heading ? `${heading}\n` : ""}${add}\n`;
+  const level = heading.match(/^#+/)[0].length;
+  let end = lines.findIndex((l, i) => i > at && (l.match(/^(#+) /)?.[1].length || 99) <= level);
+  if (end < 0) end = lines.length;
+  while (end > at + 1 && !lines[end - 1].trim()) end--;  // 節の終わりの空行の前に入れる
+  lines.splice(end, 0, ...add.split("\n"));
+  return lines.join("\n").replace(/\s+$/, "") + "\n";
+}
+// 提案の前で、いちばん近い「画像を貼った発言」の画像
+function picsBefore(at) {
+  for (let i = at - 1; i >= 0; i--) {
+    const m = chat.messages[i];
+    const pics = m.role === "user" && typeof m.content !== "string" ? m.content.filter(b => b.type === "image").map(b => b.source.data) : [];
+    if (pics.length) return pics;
+  }
+  return [];
+}
+// ノートに足して保存する。読んでから sha つきで書く。ほかで変わっていたら GitHub が断る（409）ので、読み直してもう一度だけやる
+// fresh: ファイルがないときに { front, text } を返す（null ならノートが見つからないとして止める）
+async function appendToNote(path, heading, add, fresh) {
+  const [folder, file] = path.split("/"), name = file.replace(/\.md$/, "");
+  for (let tries = 0; ; tries++) {
+    const f = await readFile(path);
+    const base = f ? { front: f.front, text: f.body } : await fresh?.();
+    if (!base) throw new Error("ノートが見つからない");
+    const front = base.front, text = addToSection(base.text, heading, add);
+    const r = await ghApi(`contents/${encPath(path)}`, {
+      method: "PUT",
+      body: JSON.stringify({ message: `${folder}: ${name}（くろとおはなしから）`, content: b64((front ? front + "\n" : "") + text), ...(f ? { sha: f.sha } : {}), branch: writeBranch() }),
+    });
+    if ((r.status === 409 || r.status === 422) && tries < 1) continue;
+    if (!r.ok) throw new Error(r.status);
+    const edits = readJson("noteEdits", {});
+    edits[name] = { sha: (await r.json()).content.sha, folder, front, body: text, at: Date.now() };
+    store.set("noteEdits", JSON.stringify(edits));
+    applyEdits(VAULT);
+    return;
+  }
+}
+// add_to_note で足せるノート（編集画面で直せるものと同じ。日記は add_to_diary）
+const appendTarget = name => {
+  const n = VAULT?.notes[name];
+  return n && n.folder !== "daily" && (TEMPLATE_OF[n.folder] || n.folder === "inbox") ? `${n.folder}/${name}.md` : null;
+};
+// くろの add_to_diary・add_to_note 提案をOKしたとき: 画像を attachments に置いて、本文と ![[画像]] をノートに足す
+async function decideAppend(id, yes) {
+  if (chat.decisions[id] === "saved" || chat.decisions[id] === "saving") return;
+  if (!yes) { chat.decisions[id] = "declined"; saveChat(); renderChat(); return; }
+  const at = chat.messages.findIndex(m => typeof m.content !== "string" && m.content.some(b => b.id === id));
+  const block = at >= 0 && chat.messages[at].content.find(b => b.id === id);
+  if (!block) return;
+  const toDiary = block.name === "add_to_diary";
+  const date = toDiary && /^\d{4}-\d{2}-\d{2}$/.test(block.input.date) ? block.input.date : todayJst();
+  const path = toDiary ? `daily/${date}.md` : appendTarget(block.input.note);
+  const where = toDiary ? "日記" : `「${block.input.note}」`;
+  chat.decisions[id] = "saving"; renderChat();
+  try {
+    if (!path) throw new Error("そのノートは見つからないか、ここからは書けないよ");
+    const pics = block.input.attach_images ? picsBefore(at) : [];
+    const names = await uploadPics(pics, date, safeTitle(block.input.title, "くろとのおはなし"), "くろとおはなしから");
+    const add = [block.input.body.trim(), ...names.map(n => `![[${n}]]`)].filter(Boolean).join("\n");
+    const section = (block.input.section || "").trim().replace(/^(?!#)/, "## ");
+    await appendToNote(path, toDiary ? "## 今日あったこと" : section === "## " ? "" : section, add, toDiary ? async () => {
+      const t = await readFile("templates/daily.md");
+      const fill = x => (x || "").replace(/\{\{date:YYYY-MM-DD\}\}/g, date).replace(/\{\{date\}\}/g, date);
+      return { front: fill(t?.front), text: fill(t?.body) || `# ${date}\n` };
+    } : null);
+    chat.decisions[id] = "saved";
+    refresh();
+  } catch (e) {
+    delete chat.decisions[id];
+    chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text: `${where}に入れられなかった（${e.message}）。「せってい」のGitHubトークンを確認してね` });
   }
   saveChat(); renderChat();
 }
