@@ -366,6 +366,7 @@ body.chat-open > :not(.chat):not(script) { visibility: hidden; }
 .propose { align-self: flex-start; max-width: 82%; background: var(--paper); border: 1.5px dashed var(--rule); border-radius: 14px; padding: 10px 13px; display: flex; flex-direction: column; gap: 8px; }
 .propose p { margin: 0; }
 .propose .row { display: flex; gap: 8px; }
+.propose .chat-img.drawn { max-width: 100%; max-height: 320px; border-radius: 12px; display: block; }
 .chat-input { display: flex; gap: 8px; align-items: flex-end; background: var(--paper); border-top: 1px solid var(--rule); padding: 8px max(12px, env(safe-area-inset-right, 0px)) calc(8px + env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
 .chat-input textarea { flex: 1; resize: none; max-height: 140px; font: inherit; font-size: 16px; color: var(--ink); background: var(--desk); border: 0; border-radius: 18px; padding: 9px 14px; line-height: 1.5; }
 .chat-input .btn-main { border-radius: 18px; padding: 9px 16px; }
@@ -1477,7 +1478,7 @@ const INBOX_TOOL = {
     properties: {
       title: { type: "string", description: "ファイル名になる短いタイトル（日本語、20文字以内）。日付は自動でつくので入れない" },
       body: { type: "string", description: "ノートの本文。サキちゃんの言葉は要約しつつ、事実と気づきを分けて書く。推測で盛らない" },
-      attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像も一緒に保存するなら true" },
+      attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像（くろが描いた絵も）も一緒に保存するなら true" },
     },
   },
 };
@@ -1491,7 +1492,7 @@ const DIARY_TOOL = {
       date: { type: "string", description: "日記の日付（YYYY-MM-DD）。今日のことなら今日の日付。昨日以前のことを書き足したいと言われたときだけ、その日にする" },
       title: { type: "string", description: "画像のファイル名になる短いタイトル（日本語、20文字以内）。日付は自動でつくので入れない" },
       body: { type: "string", description: "日記に足す文章。「- 」で始まる箇条書き1〜3行。サキちゃんの言葉は要約しつつ、事実と気づきを分けて書く。推測で盛らない。画像の埋め込みは自動で足されるので書かない" },
-      attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像も日記に貼るなら true" },
+      attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像（くろが描いた絵も）も日記に貼るなら true" },
     },
   },
 };
@@ -1506,7 +1507,7 @@ const NOTE_TOOL = {
       section: { type: "string", description: "足す先の見出し（例: ## 行った記録）。その見出しの節の最後に足す。ない見出しなら末尾に見出しごと足す。末尾でいいときは空文字" },
       title: { type: "string", description: "画像のファイル名になる短いタイトル（日本語、20文字以内）。日付は自動でつくので入れない" },
       body: { type: "string", description: "ノートに足す文章（短く。日付が大事なら「- 2026-10-20 …」の形）。サキちゃんの言葉は要約しつつ、推測で盛らない。画像の埋め込みは自動で足されるので書かない。画像だけなら空文字" },
-      attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像もノートに貼るなら true" },
+      attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像（くろが描いた絵も）もノートに貼るなら true" },
     },
   },
 };
@@ -1525,7 +1526,26 @@ const EDIT_TOOL = {
     },
   },
 };
-const CLOUD_CLIENT_TOOLS = [INBOX_TOOL, DIARY_TOOL, NOTE_TOOL, EDIT_TOOL];
+// くろが絵を描く案。OKしたらアプリがくろクラウドの /draw を呼ぶ（OpenAI の画像生成。キーは Worker の secret）。
+// くろ・サキちゃんの見た目は、Worker が Vault のプロフィール画像を参考画像として渡してそろえる。課金があるので、描くのはボタンを押したときだけ
+const DRAW_TOOL = {
+  name: "draw_picture",
+  description: "サキちゃんに「絵を描いて」「この場面を絵にして」と頼まれたとき、絵を描くことを提案する（1枚・低画質・課金あり）。呼ぶと画面に「絵を描いていい？」のボタンが出て、サキちゃんがOKしたときだけ描かれる。描いた絵は次のサキちゃんの発言といっしょに届く。日記などに貼るのは、そのあと add_to_diary・add_to_note・save_to_inbox を attach_images: true で（描いた絵も「直前の画像」になる）。頼まれていないのに描こうとしない。1回の返事で1つまで。",
+  strict: true,
+  input_schema: {
+    type: "object", additionalProperties: false, required: ["prompt", "caption", "refs", "use_pasted_images", "size"],
+    properties: {
+      prompt: { type: "string", description: "画像生成への指示（英語）。場面・構図・表情・画風を具体的に。refs で渡す人物は「the girl in reference image 1」のように参考画像の順番で指す（kuro, saki の順）。画像の中の文字は入れない。日記やノートの中身・個人情報は書かない" },
+      caption: { type: "string", description: "サキちゃんに見せる、どんな絵かの説明（日本語・短く）" },
+      refs: { type: "array", items: { type: "string", enum: ["kuro", "saki"] }, description: "見た目をそろえる人物（プロフィール画像を参考画像にする）。kuro=くろ、saki=サキちゃん。出てこないなら空" },
+      use_pasted_images: { type: "boolean", description: "サキちゃんが直前に貼った写真も参考画像にするなら true（「この写真みたいに」など）" },
+      size: { type: "string", enum: ["square", "landscape", "portrait"], description: "正方形・横長・縦長" },
+    },
+  },
+};
+const drawReady = () => !!store.get("cloudCode") && !!store.get("cloudUrl");  // 絵はいつもくろクラウドで描く（つなぎ先がブリッジ・API でも）
+const chatTools = () => [INBOX_TOOL, DIARY_TOOL, NOTE_TOOL, ...(drawReady() ? [DRAW_TOOL] : [])];
+const CLOUD_CLIENT_TOOLS = () => [...chatTools(), EDIT_TOOL];
 let chat = null, chatBusy = false, chatPics = [];
 // 「くろとおはなし」のつなぎ先: Claude API か、Mac のくろブリッジ（Mac の Claude Code・claude -p）。
 // ブリッジが配っているページ（…/app/。GitHub Pages は /kuro-app/）で開いたときはいつもブリッジ（同じ出どころ）。
@@ -1607,6 +1627,8 @@ function initChat() {
     if (dy) decideAppend(dy.dataset.diary, dy.dataset.answer === "yes");
     const pr = e.target.closest("[data-proposal]");
     if (pr) openProposal(pr.dataset.proposal);
+    const dr = e.target.closest("[data-draw]");
+    if (dr) decideDraw(dr.dataset.draw, dr.dataset.answer === "yes");
   });
   initChatSplit();
 }
@@ -1704,6 +1726,15 @@ function renderChat() {
           d === "saved" ? `<p class="form-msg ok">保存したよ</p>` : d === "declined" ? `<p class="form-msg">今回は直さなかったよ</p>`
           : `<div class="row"><button class="btn" data-proposal="${esc(b.id)}">編集画面で見る</button></div>`}</div>`);
       }
+      if (b.type === "tool_use" && b.name === "draw_picture") {
+        const d = chat.decisions[b.id], pic = drawnPic(b.id);
+        const who = (b.input.refs || []).map(r => ({ kuro: "くろ", saki: "サキちゃん" })[r]).filter(Boolean);
+        items.push(`<div class="propose"><p>🎨 絵を描いていい？ <small>（1枚・低画質・課金あり）</small><br><small>${esc(b.input.caption || "")}${
+          who.length || b.input.use_pasted_images ? `<br>参考: ${esc([...who, ...(b.input.use_pasted_images ? ["貼った写真"] : [])].join("・"))}` : ""}</small></p>${
+          pic ? `<img class="chat-img drawn" src="data:image/jpeg;base64,${pic}" alt="${esc(b.input.caption || "くろが描いた絵")}">`
+          : d === "saving" ? `<p class="form-msg">描いてる…（30秒〜1分くらい）</p>` : d === "declined" ? `<p class="form-msg">今回は描かなかったよ</p>`
+          : `<div class="row"><button class="btn" data-draw="${esc(b.id)}" data-answer="yes">描く</button><button class="btn" data-draw="${esc(b.id)}" data-answer="no">やめとく</button></div>`}</div>`);
+      }
     }
     (chat.notes || []).filter(n => n.after === i).forEach(n => items.push(`<div class="bubble note">${esc(n.text)}</div>`));
   });
@@ -1735,6 +1766,7 @@ function kuroSystem() {
 - サキちゃんが「日記に書いて」「日記にして」と言ったら、add_to_diary で日記への追記を提案する（画像を貼っていたら attach_images を true に）。inbox に入れるか日記に入れるかは、サキちゃんの言い方に合わせる
 - サキちゃんが今あるノート（お店・人・プロジェクトなど）に足してと言ったら、add_to_note で追記を提案する（画像を貼っていたら attach_images を true に）。ノート名は下の「ノートの一覧」から選ぶ。見出しが分からなければ section は空にする（推測で見出しを作らない）
 - サキちゃんは写真や画像を貼ることがある。見えたものを素直に話し、写っていないことを推測で盛らない
+${drawReady() ? "- サキちゃんに「絵を描いて」と頼まれたら、draw_picture で「絵を描いていい？」と提案する（課金があるので、頼まれたときだけ。1回1枚）。くろやサキちゃんが出てくる絵なら refs に入れる（プロフィール画像で見た目がそろう）。描けた絵は次の発言で届くので、ひとこと感想を言う。日記などに貼りたいと言われたら attach_images を true にして提案する" : "- 今は絵を描けない（「せってい」にくろクラウドのURLと合言葉がないため）。頼まれたら、そう伝える"}
 
 # くろのプロフィール（Vault より）
 （※ この中の例文には、前の書き方で敬語や「先輩」が混ざっている。中身・性格だけ参考にして、話すときは必ずタメ口に直し、「サキちゃん」と呼ぶ）
@@ -1766,7 +1798,7 @@ async function callBridge() {
       method: "POST",
       headers: { "content-type": "application/json", "x-kuro-code": relayCode() },
       // くろクラウドには、画面のボタンにする道具の定義も送る（道具を足すときは、ここ＝アプリだけ直せばいい）。ブリッジは印で出すので送らない
-      body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel(), ...(viaCloud() ? { client_tools: CLOUD_CLIENT_TOOLS } : {}) }),
+      body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel(), ...(viaCloud() ? { client_tools: CLOUD_CLIENT_TOOLS() } : {}) }),
       signal: AbortSignal.timeout(210_000),  // ブリッジ側は3分で打ち切るので、それより少し長く待つ（くろクラウドも同じだけ待つ）
     });
   } catch { throw new Error(asleep); }
@@ -1790,7 +1822,8 @@ async function callClaude() {
   const body = {
     model, max_tokens: 16000,
     system: kuroSystem(), messages: chat.messages,
-    tools: chat.messages.some(m => typeof m.content !== "string" && m.content.some(b => b.name === "propose_edit")) ? [INBOX_TOOL, DIARY_TOOL, NOTE_TOOL, EDIT_TOOL] : [INBOX_TOOL, DIARY_TOOL, NOTE_TOOL],
+    // 履歴に残った道具は、定義がないと API が受けつけないので渡す（絵の道具は、くろクラウドの設定を消したあとも）
+    tools: [...new Set([...chatTools(), ...[EDIT_TOOL, DRAW_TOOL].filter(t => chat.messages.some(m => typeof m.content !== "string" && m.content.some(b => b.name === t.name)))])],
     output_config: { effort: "low" },  // おしゃべりなので軽め
     cache_control: { type: "ephemeral" },
   };
@@ -1812,6 +1845,13 @@ async function chatSend() {
   if (last?.role === "assistant") for (const b of last.content) if (b.type === "tool_use") {
     if (chat.decisions[b.id] !== "saved") chat.decisions[b.id] = "declined";
     const saved = chat.decisions[b.id] === "saved";
+    // 描いた絵は、くろにも見えるように画像で返す（日記などに貼るときの「直前の画像」にもなる）
+    if (b.name === "draw_picture") {
+      content.push({ type: "tool_result", tool_use_id: b.id, content: saved && chat.drawn?.[b.id]
+        ? [{ type: "text", text: "サキちゃんがOKして、絵を描いた。サキちゃんにも見えている（まだどこにも保存していない）" }, { type: "image", source: { type: "base64", media_type: "image/jpeg", data: chat.drawn[b.id] } }]
+        : "サキちゃんは今回は描かなかった" });
+      continue;
+    }
     content.push({ type: "tool_result", tool_use_id: b.id, content: b.name === "propose_edit"
       ? (saved ? "サキちゃんが直し案を見て、編集画面で保存した（そのまま、または手直しして）" : "サキちゃんは今回は直さなかった")
       : b.name === "add_to_diary" ? (saved ? "サキちゃんがOKして、日記に追記した" : "サキちゃんは今回は日記に入れなかった")
@@ -1829,6 +1869,8 @@ async function chatSend() {
     const res = await callClaude();
     if (res.stop_reason === "refusal" || !res.content?.length) throw new Error("ごめん、それにはうまく答えられないみたい");
     chat.messages.push({ role: "assistant", content: res.content });
+    // 送れた絵は履歴（tool_result）に入ったので、二重に持たない
+    for (const b of content) if (b.type === "tool_result" && Array.isArray(b.content)) delete chat.drawn?.[b.tool_use_id];
   } catch (e) {
     chat.messages.pop();  // 失敗した発言は履歴に残さず、入力欄に戻す
     ta.value = text;
@@ -1845,12 +1887,7 @@ async function decideInbox(id, yes) {
   const at = chat.messages.findIndex(m => typeof m.content !== "string" && m.content.some(b => b.id === id));
   const block = at >= 0 && chat.messages[at].content.find(b => b.id === id);
   if (!block) return;
-  // 提案の前で、いちばん近い「画像を貼った発言」の画像
-  let pics = [];
-  if (block.input.attach_images) for (let i = at - 1; i >= 0 && !pics.length; i--) {
-    const m = chat.messages[i];
-    if (m.role === "user" && typeof m.content !== "string") pics = m.content.filter(b => b.type === "image").map(b => b.source.data);
-  }
+  const pics = block.input.attach_images ? picsBefore(at) : [];
   chat.decisions[id] = "saving"; renderChat();
   const { date } = jstNow();
   const title = safeTitle(block.input.title, "くろとのおはなし");
@@ -1880,13 +1917,50 @@ function addToSection(text, heading, add) {
   return lines.join("\n").replace(/\s+$/, "") + "\n";
 }
 // 提案の前で、いちばん近い「画像を貼った発言」の画像
+// （くろが描いた絵も、tool_result の中の画像として数える）
 function picsBefore(at) {
   for (let i = at - 1; i >= 0; i--) {
     const m = chat.messages[i];
-    const pics = m.role === "user" && typeof m.content !== "string" ? m.content.filter(b => b.type === "image").map(b => b.source.data) : [];
+    const blocks = m.role === "user" && typeof m.content !== "string" ? m.content.flatMap(b => b.type === "tool_result" && Array.isArray(b.content) ? b.content : [b]) : [];
+    const pics = blocks.filter(b => b.type === "image").map(b => b.source.data);
     if (pics.length) return pics;
   }
   return [];
+}
+// くろが描いた絵（送る前は chat.drawn、送ったあとは履歴の tool_result の中）
+function drawnPic(id) {
+  if (chat.drawn?.[id]) return chat.drawn[id];
+  for (const m of chat.messages) if (m.role === "user" && typeof m.content !== "string") for (const b of m.content) {
+    if (b.type === "tool_result" && b.tool_use_id === id && Array.isArray(b.content)) return b.content.find(c => c.type === "image")?.source.data || null;
+  }
+  return null;
+}
+// くろの draw_picture 提案をOKしたとき: くろクラウドの /draw で描いて、カードに出す（保存はしない。貼るのは add_to_diary などで）
+const DRAW_SIZES = { square: "1024x1024", landscape: "1536x1024", portrait: "1024x1536" };
+async function decideDraw(id, yes) {
+  if (drawnPic(id) || chat.decisions[id] === "saving") return;
+  if (!yes) { chat.decisions[id] = "declined"; saveChat(); renderChat(); return; }
+  const at = chat.messages.findIndex(m => typeof m.content !== "string" && m.content.some(b => b.id === id));
+  const block = at >= 0 && chat.messages[at].content.find(b => b.id === id);
+  if (!block) return;
+  if (!drawReady()) { chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text: "絵を描くには、「せってい」でくろクラウドのURLと合言葉を入れてね" }); saveChat(); renderChat(); return; }
+  chat.decisions[id] = "saving"; renderChat();
+  try {
+    const r = await fetch(`${store.get("cloudUrl")}/draw`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-kuro-code": store.get("cloudCode") },
+      body: JSON.stringify({ prompt: block.input.prompt, refs: block.input.refs || [], size: DRAW_SIZES[block.input.size] || DRAW_SIZES.square, pics: block.input.use_pasted_images ? picsBefore(at).slice(0, 3) : [] }),
+      signal: AbortSignal.timeout(180_000),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.image) throw new Error(`${r.status} ${j.error || ""}`.trim());
+    (chat.drawn ||= {})[id] = j.image;
+    chat.decisions[id] = "saved";
+  } catch (e) {
+    delete chat.decisions[id];
+    chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text: `絵を描けなかった（${e.name === "TimeoutError" ? "時間がかかりすぎた" : e.message}）` });
+  }
+  saveChat(); renderChat();
 }
 // ノートに足して保存する。読んでから sha つきで書く。ほかで変わっていたら GitHub が断る（409）ので、読み直してもう一度だけやる
 // fresh: ファイルがないときに { front, text } を返す（null ならノートが見つからないとして止める）

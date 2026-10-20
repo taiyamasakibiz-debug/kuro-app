@@ -6,6 +6,7 @@
 //     GITHUB_TOKEN      … Vault（kuro-second-brain）だけ・Contents の Read and write の Fine-grained トークン
 //     KURO_CODE         … アプリから呼ぶときの合言葉（24文字以上。ブリッジとちがって起動ごとには変わらない）
 //     SHANONE_API_KEY / SHANONE_ORG_ID … ネット検索（Shanone の tavily_search）。なければ検索なしで動く
+//     OPENAI_API_KEY    … 絵を描く（/draw・OpenAI の画像生成）。権限は Images だけのキーにする。なければ絵なしで動く
 //   ふつうの設定（vars）: VAULT_REPO（既定 taiyamasakibiz-debug/kuro-second-brain）、ALLOW_ORIGINS（既定は GitHub Pages）
 // - くろができること（ブリッジと同じ広さ。ただし「足すだけ」はお願いではなく、このコードで止める）
 //     Vault を探す・読む・一覧（GitHub の main を読む）
@@ -17,6 +18,7 @@
 //   GET  /ping                            → {ok, vault, search}
 //   POST /chat {system, messages, model, client_tools}  → Claude API の Messages と同じ形の {content, stop_reason}
 //     client_tools: アプリが画面のボタンにする道具の定義（save_to_inbox など）。ここでは実行せずにアプリへ返す
+//   POST /draw {prompt, refs, size, pics}  → {image（JPEG の base64）}。アプリで「描く」を押したときだけ（くろの道具ではない）
 
 const MODELS = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"];  // アプリのせっていで選べるもの
 const READ_DIRS = ["daily", "notes", "people", "projects", "shops", "kuro", "inbox", "templates"];
@@ -133,18 +135,19 @@ export default {
     if (req.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: { ...cors, "access-control-allow-methods": "GET, POST", "access-control-allow-headers": "content-type, x-kuro-code", "access-control-max-age": "600" } });
     }
-    const api = (req.method === "POST" && url.pathname === "/chat") || (req.method === "GET" && url.pathname === "/ping");
+    const api = (req.method === "POST" && (url.pathname === "/chat" || url.pathname === "/draw")) || (req.method === "GET" && url.pathname === "/ping");
     if (!api) return json({ error: "not found" }, 404, cors);
     if (!env.KURO_CODE || env.KURO_CODE.length < 24) return json({ error: "Worker の KURO_CODE（24文字以上）がまだ入っていない" }, 500, cors);
     if (!sameText(req.headers.get("x-kuro-code") || "", env.KURO_CODE)) return json({ error: "合言葉がちがう" }, 401, cors);
     const vault = !!(env.GITHUB_TOKEN && env.ANTHROPIC_API_KEY);
-    if (url.pathname === "/ping") return json({ ok: true, vault, search: hasShanone(env) }, 200, cors);
-    if (!vault) return json({ error: "Worker の ANTHROPIC_API_KEY か GITHUB_TOKEN がまだ入っていない" }, 500, cors);
+    if (url.pathname === "/ping") return json({ ok: true, vault, search: hasShanone(env), draw: !!(env.OPENAI_API_KEY && env.GITHUB_TOKEN) }, 200, cors);
+    if (url.pathname === "/draw" && !(env.OPENAI_API_KEY && env.GITHUB_TOKEN)) return json({ error: "Worker の OPENAI_API_KEY か GITHUB_TOKEN がまだ入っていない" }, 500, cors);
+    if (url.pathname === "/chat" && !vault) return json({ error: "Worker の ANTHROPIC_API_KEY か GITHUB_TOKEN がまだ入っていない" }, 500, cors);
 
     let body;
     try { body = await req.json(); } catch { return json({ error: "JSON じゃない" }, 400, cors); }
     try {
-      return json(await chat(env, body), 200, cors);
+      return json(url.pathname === "/draw" ? await draw(env, body) : await chat(env, body), 200, cors);
     } catch (e) {
       return json({ error: e.message }, e.status || 500, cors);
     }
@@ -402,6 +405,62 @@ async function webSearch(env, { query, time_range, include_domains }) {
   if (!env1.success || !data?.results) throw new Error(`検索できなかった（${env1.error?.message || env1.data?.error || "わからないエラー"}）`);
   if (!data.results.length) return `「${query}」で見つからなかった`;
   return data.results.map((x) => `■ ${x.title}\n${x.url}\n${String(x.content || "").replace(/\s+/g, " ").slice(0, 1200)}`).join("\n\n");
+}
+
+/* ---- /draw: 絵を描く（OpenAI の画像生成）----
+   アプリでサキちゃんが「描く」を押したときだけ呼ばれる（くろが勝手には呼べない。/chat の道具には入れていない）。
+   くろ・サキちゃんの見た目は、Vault のプロフィール画像を Worker が GitHub から読んで参考画像にする。
+   GitHub の鍵つき URL を外に渡さず、画像そのものを OpenAI に送る（Shanone 経由だと URL で渡すしかなかった）。
+   1回1枚・低画質だけ。返す絵は JPEG（iPhone の保存場所とくろへの送り直しが軽いように） */
+const IMAGE_MODEL = "gpt-image-2.5-flare";  // Vault の notes/画像生成APIの追加.md の最新の記録と合わせる
+const DRAW_REFS = {
+  kuro: "attachments/2026-10-09-プロフィール画像-くろ.png",
+  saki: "attachments/2026-10-09-プロフィール画像-サキちゃん.png",
+};
+const DRAW_SIZES = ["1024x1024", "1536x1024", "1024x1536"];
+const refCache = new Map();  // 同じ Worker の中では参考画像を使い回す
+
+async function vaultImage(env, path) {
+  if (refCache.has(path)) return refCache.get(path);
+  const r = await gh(env, `${contentsPath(env, path)}?ref=main`, { headers: { accept: "application/vnd.github.raw" } });
+  if (!r.ok) throw new Error(`参考画像を読めなかった（${path} ${r.status}）`);
+  const blob = new Blob([await r.arrayBuffer()], { type: path.endsWith(".png") ? "image/png" : "image/jpeg" });
+  refCache.set(path, blob);
+  return blob;
+}
+const fromB64Bytes = (b) => Uint8Array.from(atob(String(b).replace(/\s/g, "")), (c) => c.charCodeAt(0));
+
+async function draw(env, { prompt, refs, size, pics }) {
+  prompt = String(prompt || "").trim();
+  if (!prompt) throw Object.assign(new Error("何を描くかが空っぽ"), { status: 400 });
+  if (prompt.length > 4000) throw Object.assign(new Error("描く指示が長すぎる"), { status: 400 });
+  size = DRAW_SIZES.includes(size) ? size : DRAW_SIZES[0];
+  const refPaths = [...new Set(Array.isArray(refs) ? refs : [])].filter((k) => DRAW_REFS[k]).map((k) => DRAW_REFS[k]);
+  // 貼った写真（アプリが縮小した JPEG の base64）は3枚まで・1枚2MBまで
+  const pasted = (Array.isArray(pics) ? pics : []).slice(0, 3).filter((p) => typeof p === "string" && p.length < 2_800_000);
+  const opts = { model: IMAGE_MODEL, size, quality: "low", n: "1", output_format: "jpeg", output_compression: "85" };
+  const headers = { authorization: `Bearer ${env.OPENAI_API_KEY}`, "user-agent": "kuro-cloud/1.0" };
+  let r;
+  if (refPaths.length || pasted.length) {
+    // 参考画像あり → edits（multipart）。順番は kuro・saki・貼った写真（プロンプトの「reference image 1」などと合う）
+    const form = new FormData();
+    for (const [k, v] of Object.entries(opts)) form.append(k, v);
+    form.append("prompt", prompt);
+    for (const p of refPaths) form.append("image[]", await vaultImage(env, p), p.split("/").pop());
+    pasted.forEach((p, i) => form.append("image[]", new Blob([fromB64Bytes(p)], { type: "image/jpeg" }), `pasted-${i + 1}.jpg`));
+    r = await fetch("https://api.openai.com/v1/images/edits", { method: "POST", headers, body: form });
+  } else {
+    r = await fetch("https://api.openai.com/v1/images/generations", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ ...opts, n: 1, output_compression: 85, prompt }),
+    });
+  }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(`OpenAI ${r.status} ${j.error?.message || ""}`.trim()), { status: 502 });
+  const image = j.data?.[0]?.b64_json;
+  if (!image) throw Object.assign(new Error("絵が返ってこなかった"), { status: 502 });
+  console.log(`絵: ${size} 参考${refPaths.length + pasted.length}枚 入力${j.usage?.input_tokens ?? "?"} 出力${j.usage?.output_tokens ?? "?"}`);
+  return { image, mime: "image/jpeg", model: IMAGE_MODEL, size, usage: j.usage || null };
 }
 
 // テスト用（node から呼ぶ）

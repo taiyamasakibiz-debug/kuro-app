@@ -110,7 +110,11 @@ images は、サキちゃんが直前に貼った画像も一緒に残すなら 
 画像を日記や今あるノートに貼りたいとき（サキちゃんが画像を貼って「日記に」「〇〇のノートに」と言ったとき）は、返事の最後に次のどちらかを1つだけ書く:
 <diary date="YYYY-MM-DD（ふだんは今日）" title="画像のファイル名になる短いタイトル" images="true">日記の「今日あったこと」に足す箇条書き</diary>
 <note name="ノート名（フォルダ名や .md なし）" section="## 足す先の見出し（末尾なら空）" title="画像のファイル名になる短いタイトル" images="true">ノートに足す文章（画像だけなら空）</note>
-画面では「日記に入れとく？」「ノートに足しとく？」のボタンになり、サキちゃんがOKしたらアプリが画像を保存して ![[画像]] つきで足す。画像の埋め込みは自分で書かない。新しいノートは作れない。`;
+画面では「日記に入れとく？」「ノートに足しとく？」のボタンになり、サキちゃんがOKしたらアプリが画像を保存して ![[画像]] つきで足す。画像の埋め込みは自分で書かない。新しいノートは作れない。
+
+サキちゃんに「絵を描いて」と頼まれたら（絵を描けるとシステムプロンプトに書いてあるときだけ）、返事の最後に次の形を1つだけ書く:
+<draw caption="どんな絵か（日本語・短く）" refs="kuro,saki のうち出てくる人（いなければ空）" size="square か landscape か portrait" pasted="true か false">画像生成への指示（英語）。refs の人は「the girl in reference image 1」のように kuro, saki の順で指す。画像の中の文字は入れない。日記やノートの中身・個人情報は書かない</draw>
+pasted は、サキちゃんが直前に貼った写真も参考にするなら true。画面では「絵を描いていい？」のボタンになり、サキちゃんがOKしたらアプリが描く（課金あり・1枚）。描いた絵は次の発言で届く。日記などに貼るときは、そのあと <diary> などを images="true" で。`;
 
 const VAULT_RULE = `
 
@@ -153,7 +157,9 @@ function blockText(b) {
   if (b.type === "tool_use" && b.name === "add_to_diary") return `（くろが「日記に入れとく？」と提案: ${b.input?.date || ""}）`;
   if (b.type === "tool_use" && b.name === "add_to_note") return `（くろが「ノートに足しとく？」と提案: ${b.input?.note || ""}）`;
   if (b.type === "tool_use" && b.name === "propose_edit") return `（くろが直し案を出した: ${b.input?.path || ""} ${b.input?.reason || ""}）`;
-  if (b.type === "tool_result") return `（さっきの提案の結果: ${typeof b.content === "string" ? b.content : ""}）`;
+  if (b.type === "tool_use" && b.name === "draw_picture") return `（くろが「絵を描いていい？」と提案: ${b.input?.caption || ""}）`;
+  if (b.type === "tool_result") return `（さっきの提案の結果: ${typeof b.content === "string" ? b.content
+    : (b.content || []).map((c) => (c.type === "text" ? c.text : c.type === "image" ? "（くろが描いた絵）" : "")).filter(Boolean).join(" ")}）`;
   return "";
 }
 const turnText = (m) => (typeof m.content === "string" ? m.content : m.content.map(blockText).filter(Boolean).join("\n"));
@@ -166,7 +172,11 @@ function chatInput(messages) {
   if (past) content.push({ type: "text", text: `ここまでの会話:\n\n${past}\n\n---\nサキちゃんの今の発言:` });
   for (const b of blocks) {
     if (b.type === "image" && b.source?.type === "base64") content.push({ type: "image", source: b.source });
-    else { const t = blockText(b); if (t) content.push({ type: "text", text: t }); }
+    else {
+      const t = blockText(b); if (t) content.push({ type: "text", text: t });
+      // くろが描いた絵（提案の結果の中の画像）も、本物の画像として見せる
+      if (b.type === "tool_result" && Array.isArray(b.content)) for (const c of b.content) if (c.type === "image" && c.source?.type === "base64") content.push({ type: "image", source: c.source });
+    }
   }
   return JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n";
 }
@@ -187,6 +197,9 @@ function toApiContent(text) {
     input: { date: attr(m[1], "date"), title: attr(m[1], "title"), body: m[2].trim(), attach_images: attr(m[1], "images") !== "false" } }));
   take(/<note\b([^>]*)>([\s\S]*?)<\/note>/, (m) => ({ name: "add_to_note",
     input: { note: attr(m[1], "name"), section: attr(m[1], "section"), title: attr(m[1], "title"), body: m[2].trim(), attach_images: attr(m[1], "images") !== "false" } }));
+  take(/<draw\b([^>]*)>([\s\S]*?)<\/draw>/, (m) => ({ name: "draw_picture",
+    input: { prompt: m[2].trim(), caption: attr(m[1], "caption"), refs: attr(m[1], "refs").split(",").map((s) => s.trim()).filter((s) => s === "kuro" || s === "saki"),
+      use_pasted_images: attr(m[1], "pasted") === "true", size: ["square", "landscape", "portrait"].includes(attr(m[1], "size")) ? attr(m[1], "size") : "square" } }));
   take(/<edit\s+path="([^"]*)"(?:\s+reason="([^"]*)")?\s*>\n?([\s\S]*?)<\/edit>/,
     (m) => ({ name: "propose_edit", input: { path: m[1].trim(), reason: (m[2] || "").trim(), content: m[3].replace(/\s+$/, "") + "\n" } }));
   text = text.trim();

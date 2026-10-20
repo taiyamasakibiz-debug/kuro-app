@@ -6,6 +6,7 @@
 #   npx wrangler secret put KURO_CODE
 #   npx wrangler secret put SHANONE_API_KEY
 #   npx wrangler secret put SHANONE_ORG_ID
+#   npx wrangler secret put OPENAI_API_KEY   # 絵を描く（Images だけのキー）。なくても動く
 name = "kuro-cloud"
 main = "worker.js"
 compatibility_date = "2026-10-01"
