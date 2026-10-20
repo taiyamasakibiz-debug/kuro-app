@@ -261,6 +261,8 @@ main { position: relative; z-index: 1; max-width: 1040px; margin: 0 auto; paddin
 .plan .what { flex: 1; min-width: 0; font-family: var(--f-hand); font-size: 1.05rem; overflow-wrap: anywhere; }
 .plan .left { flex: none; font-size: .75rem; color: var(--crayon); font-weight: 700; }
 button.plan { width: 100%; text-align: left; font: inherit; color: inherit; border-top: 0; border-right: 0; border-bottom: 0; cursor: pointer; }
+.plan .what small { display: block; font-family: var(--f-ui); font-size: .75rem; color: var(--ink-soft); }
+.plan.cancel .what { text-decoration: line-through; }
 .plan.past { opacity: .6; border-left-color: var(--rule); }
 
 /* ふりかえり */
@@ -660,7 +662,7 @@ function renderKuro() {
   </div>`;
 }
 
-/* ---- カレンダー（notes/予定.md の予定と、日記のある日） ---- */
+/* ---- カレンダー（schedule/ の予定ノートと、日記のある日） ---- */
 let calMonth = null, calDay = null;  // 表示中の月（YYYY-MM）と、えらんだ日
 function renderCalendar() {
   const todayStr = new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
@@ -676,16 +678,16 @@ function renderCalendar() {
   const [y, m] = calMonth.split("-").map(Number);
   const planRow = ev => {
     const left = Math.round((parseDate(ev.date) - parseDate(todayStr)) / 864e5);
-    return `<${ev.note ? `button type="button" data-note="${esc(ev.note)}"` : "div"} class="plan${ev.date < todayStr ? " past" : ""}">
+    return `<${ev.note ? `button type="button" data-note="${esc(ev.note)}"` : "div"} class="plan${ev.date < todayStr || ev.status === "中止" ? " past" : ""}${ev.status === "中止" ? " cancel" : ""}">
       <span class="when"><b>${parseDate(ev.date).getMonth() + 1}/${parseDate(ev.date).getDate()}（${WEEK[parseDate(ev.date).getDay()]}）</b>${esc(ev.time || "")}</span>
-      <span class="what">${esc(ev.title)}</span>
-      ${left === 0 ? `<span class="left">きょう！</span>` : left > 0 ? `<span class="left">あと${left}日</span>` : ""}
+      <span class="what">${esc(ev.title)}${ev.place ? `<small>${esc(ev.place)}</small>` : ""}</span>
+      ${ev.status === "中止" ? `<span class="left">中止</span>` : left === 0 ? `<span class="left">きょう！</span>` : left > 0 ? `<span class="left">あと${left}日</span>` : ""}
     </${ev.note ? "button" : "div"}>`;
   };
   const picked = byDate[calDay] || [];
   const upcoming = events.filter(ev => ev.date >= todayStr).slice(0, 8);
   $view.innerHTML = `
-    <div class="lead"><h2>カレンダー</h2><p>予定は「予定」ノートから。くろの顔がある日は日記がある日だよ。</p></div>
+    <div class="lead"><h2>カレンダー</h2><p>予定は schedule/ の予定ノートから。くろの顔がある日は日記がある日だよ。</p>${newBtn("schedule", "新しい予定")}</div>
     <div class="cal-wrap">
       <div class="cal">
         <div class="cal-head">
@@ -712,12 +714,12 @@ function renderCalendar() {
         ${picked.map(planRow).join("") || `<p class="room-note">この日の予定はないよ</p>`}
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           ${diary.has(calDay) ? `<button class="btn" data-day="${calDay}">この日の日記をひらく</button>` : ""}
-          ${VAULT.notes["予定"] ? `<button class="btn" data-note="予定">「予定」ノートをひらく</button>` : ""}
+          ${VAULT.notes["予定"] ? `<button class="btn" data-note="予定">予定の書き方</button>` : ""}
         </div>
       </div>
       <div class="cal-list">
         <h4>これからの予定</h4>
-        ${upcoming.map(planRow).join("") || `<p class="room-note">まだ予定がないよ。「予定」ノートに書くとここに出るよ</p>`}
+        ${upcoming.map(planRow).join("") || `<p class="room-note">まだ予定がないよ。「＋ 新しい予定」から作るとここに出るよ</p>`}
       </div>
     </div>`;
 }
@@ -1060,7 +1062,7 @@ const safeTitle = (t, fallback) => (t.replace(/^\s*\d{4}-\d{2}-\d{2}[\s\-_]*/, "
    保存できたら、アプリの中ですぐ作り直す（noteEdits に覚えておく）。Actions が作り直した data.json が
    その編集を含む（そのノートの sha が同じ）まで、または15分たつまで、覚えたほうを重ねる。 */
 let editing = null;  // { name, folder, path, sha, front, text, other, msg, isNew }
-const TEMPLATE_OF = { daily: "daily", notes: "note", people: "person", projects: "project", shops: "shop", kuro: "kuro" };
+const TEMPLATE_OF = { daily: "daily", notes: "note", people: "person", projects: "project", shops: "shop", schedule: "schedule", kuro: "kuro" };
 const INDEX_DIRS = ["notes", "projects", "people", "inbox"];  // build.py の INDEX_DIRS と同じ
 const newBtn = (folder, label) => REMOTE ? `<button class="btn new-btn" data-new="${folder}">＋ ${label}</button>` : "";
 const writeBranch = () => new URLSearchParams(location.search).get("src") || store.get("branch") || "main";
@@ -1117,6 +1119,14 @@ function applyEdits(data) {
       }
       Object.assign(day, daySummary(e.body), { sha: e.sha });
     }
+    if (e.folder === "schedule") {  // build.py の build_events() のまね
+      const date = frontValue(e.front, "date") || name.slice(0, 10);
+      const title = (e.body.match(/^# (.+)$/m) || [])[1]?.trim() || name;
+      data.events = (data.events || []).filter(x => x.note !== name);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(date)) data.events.push({ date, time: frontValue(e.front, "time").replace(/\s*[〜~-]\s*/g, "〜"),
+        title: title.replace(/^\d{4}-\d{2}-\d{2}\s*/, "") || title, place: frontValue(e.front, "place"), status: frontValue(e.front, "status"), note: name });
+      data.events.sort((x, y) => (x.date + x.time).localeCompare(y.date + y.time));
+    }
     if (INDEX_DIRS.includes(e.folder)) {
       const title = (e.body.match(/^# (.+)$/m) || [])[1]?.trim() || name;
       data.index[name] = { backlinks: [], ...data.index[name], title, tags: frontTags(e.front).filter(t => t !== "project"),
@@ -1163,7 +1173,14 @@ let editBackTo = null;
 const safeName = t => t.replace(/[\\/:*?"<>|#^\[\]]/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
 async function openNew(folder) {
   let name = todayJst();
-  if (folder !== "daily") {
+  let date = "";
+  if (folder === "schedule") {  // 予定は「YYYY-MM-DD 内容」の名前にして、frontmatter の date もその日にする
+    date = (prompt("予定の日（例: 2026-11-14）", calDay || todayJst()) || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return date && alert("日付は 2026-11-14 の形で入れてね");
+    const what = safeName(prompt("予定の内容（例: 瑠璃光院 秋の特別拝観）") || "");
+    if (!what) return;
+    name = `${date} ${what}`;
+  } else if (folder !== "daily") {
     name = safeName(prompt({ notes: "新しいノートの名前（内容が分かる名詞で）", people: "新しい人の名前", projects: "新しいプロジェクトの名前", shops: "お店の名前" }[folder] || "名前") || "");
     if (!name) return;
   }
@@ -1180,7 +1197,9 @@ async function openNew(folder) {
     const t = await readFile(`templates/${TEMPLATE_OF[folder]}.md`);
     const fill = x => (x || "").replace(/\{\{date:YYYY-MM-DD\}\}/g, todayJst()).replace(/\{\{date\}\}/g, todayJst()).replace(/\{\{title\}\}/g, name);
     if (editing?.path !== path) return;
-    startEditor({ name, folder, path, sha: null, front: fill(t?.front), text: fill(t?.body) || `# ${name}\n`, isNew: true });
+    let front = fill(t?.front), text = fill(t?.body) || `# ${name}\n`;
+    if (date) { front = front.replace(/^date:.*$/m, `date: ${date}`); text = text.replace(`# ${name}`, `# ${name.slice(11)}`); }
+    startEditor({ name, folder, path, sha: null, front, text, isNew: true });
   } catch (err) {
     editing = null;
     $view.innerHTML = `<p class="empty-note">作れなかった（${esc(err.message)}）<br><button class="btn" id="edit-back">もどる</button></p>`;
