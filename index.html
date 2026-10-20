@@ -86,10 +86,10 @@ button { font: inherit; color: inherit; }
 /* ヘッダーとタブ */
 .top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--paper); border-bottom: 1px solid var(--rule); }
 .top-inner { max-width: 1040px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 10px 0; }
-.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-.brand h1 { margin: 0; font-family: var(--f-hand); font-weight: 600; font-size: 1.45rem; letter-spacing: .04em; }
-.brand small { color: var(--ink-soft); font-size: .8rem; }
-.reload { border: 1.5px solid var(--rule); background: var(--paper); color: var(--ink-soft); border-radius: 99px; padding: 0 10px; min-height: 24px; cursor: pointer; font-size: .8rem; line-height: 1; }
+.brand { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.brand h1 { flex: none; white-space: nowrap; margin: 0; font-family: var(--f-hand); font-weight: 600; font-size: 1.45rem; letter-spacing: .04em; }
+.brand small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); font-size: .8rem; }
+.reload { flex: none; align-self: center; margin-left: auto; border: 1.5px solid var(--rule); background: var(--paper); color: var(--ink-soft); border-radius: 99px; padding: 0 10px; min-height: 24px; cursor: pointer; font-size: .8rem; line-height: 1; }
 .reload:hover { border-color: var(--ink-soft); }
 .tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; margin-top: 4px; }
 .tabs::-webkit-scrollbar { display: none; }
