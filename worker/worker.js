@@ -15,7 +15,8 @@
 //   今ある文を直すときは、ブリッジと同じく直し案（propose_edit）→ アプリの編集画面でサキちゃんが保存する
 // API（ブリッジと同じ形。アプリはつなぎ先を切りかえるだけ）:
 //   GET  /ping                            → {ok, vault, search}
-//   POST /chat {system, messages, model}  → Claude API の Messages と同じ形の {content, stop_reason}
+//   POST /chat {system, messages, model, client_tools}  → Claude API の Messages と同じ形の {content, stop_reason}
+//     client_tools: アプリが画面のボタンにする道具の定義（save_to_inbox など）。ここでは実行せずにアプリへ返す
 
 const MODELS = ["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"];  // アプリのせっていで選べるもの
 const READ_DIRS = ["daily", "notes", "people", "projects", "shops", "kuro", "inbox", "templates"];
@@ -25,61 +26,19 @@ const MAX_ROUNDS = 8;  // 1回の返事で道具を使う回数の上限（使�
 const SHANONE_TOOLS = { web_search: "tavily_search" };
 
 /* ---- 道具 ---- */
-// アプリが画面のボタンにする道具（ここでは実行しない。返事に入れてアプリへ返す）。定義はアプリと同じ
-const CLIENT_TOOLS = [
-  {
-    name: "save_to_inbox",
-    description: "サキちゃんとの話で、あとで残す価値がありそうな気づき・アイデア・出来事が出たときに、inbox に入れることを提案する。サキちゃんが貼った画像も一緒に残すなら attach_images を true にする（直前に画像を貼った発言の画像が attachments に保存され、ノートに貼られる）。呼ぶと画面に「inboxに入れとく？」のボタンが出て、サキちゃんが決める（勝手には保存されない）。結果は次のサキちゃんの発言といっしょに届く。1回の返事で1つまで。雑談の全文ではなく、面白い気づきだけを要約する。画像をつけないなら vault_create で直接 inbox に作ってもいい",
-    input_schema: {
-      type: "object", additionalProperties: false, required: ["title", "body", "attach_images"],
-      properties: {
-        title: { type: "string", description: "ファイル名になる短いタイトル（日本語、20文字以内）。日付は自動でつくので入れない" },
-        body: { type: "string", description: "ノートの本文。サキちゃんの言葉は要約しつつ、事実と気づきを分けて書く。推測で盛らない" },
-        attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像も一緒に保存するなら true" },
-      },
-    },
-  },
-  {
-    name: "add_to_diary",
-    description: "サキちゃんが貼った画像を日記（daily/）に貼って追記したいときに提案する（画像がないなら vault_append で直接足していい）。呼ぶと画面に「日記に入れとく？」のボタンが出て、サキちゃんがOKしたときだけ、アプリが画像を attachments に保存して「## 今日あったこと」の最後に本文と画像を足す（勝手には保存されない）",
-    input_schema: {
-      type: "object", additionalProperties: false, required: ["date", "title", "body", "attach_images"],
-      properties: {
-        date: { type: "string", description: "日記の日付（YYYY-MM-DD）。ふだんは今日" },
-        title: { type: "string", description: "画像のファイル名になる短いタイトル（日本語、20文字以内）。日付は自動でつくので入れない" },
-        body: { type: "string", description: "日記に足す文章。「- 」で始まる箇条書き1〜3行。推測で盛らない。画像の埋め込みは自動で足されるので書かない" },
-        attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像も日記に貼るなら true" },
-      },
-    },
-  },
-  {
-    name: "add_to_note",
-    description: "サキちゃんが貼った画像を、今あるノート（日記以外。notes・people・projects・shops・kuro・inbox など）に貼って追記したいときに提案する（画像がないなら vault_append で直接足していい）。呼ぶと画面に「ノートに足しとく？」のボタンが出て、サキちゃんがOKしたときだけ、アプリが画像を attachments に保存してノートに足す（勝手には保存されない）。新しいノートは作れない",
-    input_schema: {
-      type: "object", additionalProperties: false, required: ["note", "section", "title", "body", "attach_images"],
-      properties: {
-        note: { type: "string", description: "足す先のノート名（フォルダ名や .md はつけない）" },
-        section: { type: "string", description: "足す先の見出し（例: ## 行った記録）。その見出しの節の最後に足す。末尾でいいときは空文字" },
-        title: { type: "string", description: "画像のファイル名になる短いタイトル（日本語、20文字以内）。日付は自動でつくので入れない" },
-        body: { type: "string", description: "ノートに足す文章（短く）。推測で盛らない。画像の埋め込みは自動で足されるので書かない。画像だけなら空文字" },
-        attach_images: { type: "boolean", description: "サキちゃんが直前に貼った画像もノートに貼るなら true" },
-      },
-    },
-  },
-  {
-    name: "propose_edit",
-    description: "Vault の今あるノートを直す案を出す。呼ぶと画面に「くろの直し案」のボタンが出て、サキちゃんが編集画面で見くらべて保存する（勝手には保存されない）。先に vault_read で今の中身を全部読んでから使う。",
-    input_schema: {
-      type: "object", additionalProperties: false, required: ["path", "reason", "content"],
-      properties: {
-        path: { type: "string", description: "直すファイルのパス（例: notes/ノート名.md）" },
-        reason: { type: "string", description: "何をどう直したか（短く）" },
-        content: { type: "string", description: "直したあとのファイルの中身ぜんぶ（frontmatter から最後まで）。直すところ以外は省略せずにそのまま写す" },
-      },
-    },
-  },
-];
-const CLIENT_NAMES = CLIENT_TOOLS.map((t) => t.name);
+// アプリが画面のボタンにする道具（ここでは実行しない。返事に入れてアプリへ返す）。
+// 定義はアプリが /chat の client_tools で毎回送ってくる（アプリだけ直せば道具を足せる。ここに写さない）。
+// 実行しないので危なくはないが、ここの道具と同じ名前・大きすぎるものは受けつけない
+const MAX_CLIENT_TOOLS = 8, MAX_CLIENT_TOOLS_SIZE = 20_000;
+function clientTools(list) {
+  if (!Array.isArray(list)) return [];
+  const own = [...VAULT_TOOLS, ...WRITE_TOOLS, SEARCH_TOOL].map((t) => t.name);
+  const tools = list.slice(0, MAX_CLIENT_TOOLS)
+    .filter((t) => t && /^[a-z_]{1,40}$/.test(t.name) && !own.includes(t.name) && typeof t.description === "string" && t.input_schema?.type === "object")
+    .map((t) => ({ name: t.name, description: t.description.slice(0, 2000), input_schema: t.input_schema, ...(t.strict === true ? { strict: true } : {}) }));
+  if (JSON.stringify(tools).length > MAX_CLIENT_TOOLS_SIZE) throw Object.assign(new Error("client_tools が大きすぎる"), { status: 400 });
+  return tools;
+}
 
 const VAULT_TOOLS = [
   {
@@ -153,8 +112,8 @@ const CLOUD_RULE = `
 - 新しいノートは templates/ のひな形（daily.md・note.md・person.md・project.md・shop.md・kuro.md）を読んで、その形で作る（{{date:YYYY-MM-DD}} は今日の日付、{{title}} はノート名）。inbox は inbox/YYYY-MM-DD-タイトル.md（frontmatter は type: inbox / created / tags: [くろとおはなし]）
 - 日記は daily/YYYY-MM-DD.md の「## 今日あったこと」などの見出しに heading を指定して、箇条書きで足す。その日のファイルがなければ templates/daily.md の形で作る
 - 事実と気づきを分け、推測で盛らない。パスワード・口座番号・カード番号など機微な情報は書かない。人・ノートに触れたら [[ノート名]] でリンクする
-- 画像もいっしょに残したいときは、inbox なら save_to_inbox、日記なら add_to_diary、今あるノートなら add_to_note で提案する（画像の保存はアプリがやる。画像は vault_append では貼れない）
-- 今ある文を消す・書きかえるときは、自分では書かずに propose_edit で直し案を出す（頼まれたときだけ）
+- 画像もいっしょに残したいときは、inbox なら save_to_inbox、日記なら add_to_diary、今あるノートなら add_to_note で提案する（画像の保存はアプリがやる。画像は vault_append では貼れない）。画像がないなら、提案せずに vault_append・vault_create で直接書いていい。提案は1回の返事で1つまで
+- 今ある文を消す・書きかえるときは、自分では書かずに propose_edit で直し案を出す（頼まれたときだけ。先に vault_read で今の中身を全部読み、直すところ以外は省略せずに写す）
 - 書いたら、どのファイルに何を書いたかを返事で伝える。書けなかったら、そう言う（書いたふりをしない）。アプリの日記に出るのは、少しあと（GitHub の更新のあと）`;
 
 const SEARCH_RULE = `
@@ -203,10 +162,11 @@ function sameText(a, b) {
 const hasShanone = (env) => !!(env.SHANONE_API_KEY && env.SHANONE_ORG_ID);
 
 /* ---- /chat: 道具を使いながら、返事ができるまで Claude API を呼ぶ ---- */
-async function chat(env, { system, messages, model }) {
+async function chat(env, { system, messages, model, client_tools }) {
   if (!Array.isArray(messages) || !messages.length || messages[messages.length - 1].role !== "user") throw Object.assign(new Error("messages の形がへん"), { status: 400 });
   model = MODELS.includes(model) ? model : MODELS[0];
-  const tools = [...CLIENT_TOOLS, ...VAULT_TOOLS, ...WRITE_TOOLS, ...(hasShanone(env) ? [SEARCH_TOOL] : [])];
+  const client = clientTools(client_tools), clientNames = client.map((t) => t.name);
+  const tools = [...client, ...VAULT_TOOLS, ...WRITE_TOOLS, ...(hasShanone(env) ? [SEARCH_TOOL] : [])];
   const sys = String(system || "") + CLOUD_RULE + (hasShanone(env) ? SEARCH_RULE : "");
   const convo = [...messages];
   const texts = [], wrote = [], used = { input: 0, output: 0, cacheRead: 0, searches: 0 };
@@ -219,7 +179,7 @@ async function chat(env, { system, messages, model }) {
     for (const b of res.content) if (b.type === "text" && b.text.trim()) texts.push(b.text.trim());
     const calls = res.content.filter((b) => b.type === "tool_use");
     // 道具を使わずに終わった・アプリのボタンの道具を出した・上限 → アプリへ返す
-    if (res.stop_reason !== "tool_use" || calls.some((b) => CLIENT_NAMES.includes(b.name)) || round === MAX_ROUNDS) break;
+    if (res.stop_reason !== "tool_use" || calls.some((b) => clientNames.includes(b.name)) || round === MAX_ROUNDS) break;
     const results = [];
     for (const b of calls) {
       try {
@@ -238,7 +198,7 @@ async function chat(env, { system, messages, model }) {
   // アプリに返すのは、文と、アプリのボタンの道具だけ（Vault や検索の道具のやりとりは、ここで終わっている）
   const content = [];
   if (texts.length) content.push({ type: "text", text: texts.join("\n\n") });
-  content.push(...res.content.filter((b) => b.type === "tool_use" && CLIENT_NAMES.includes(b.name)));
+  content.push(...res.content.filter((b) => b.type === "tool_use" && clientNames.includes(b.name)));
   return { content, stop_reason: res.stop_reason === "refusal" ? "refusal" : "end_turn", model: res.model, wrote, usage: used };
 }
 

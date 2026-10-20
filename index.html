@@ -1510,21 +1510,22 @@ const NOTE_TOOL = {
     },
   },
 };
-// くろの直し案。ブリッジのくろ（Vault を読める）が <edit> の印で出したものを、この形にする。
+// くろの直し案。ブリッジのくろ（Vault を読める）が <edit> の印で出したものを、この形にする。くろクラウドには道具として渡す。
 // Claude API のくろはノートの中身を読めないので、自分からは使わない。会話の途中でブリッジから API に切りかえたとき、
 // 履歴に残った propose_edit を API が受けつけるように、そのときだけ定義を渡す
 const EDIT_TOOL = {
   name: "propose_edit",
-  description: "Vault の今あるノートを直す案を出す（ブリッジのくろだけが使う）。呼ぶと画面に「くろの直し案」のボタンが出て、サキちゃんが編集画面で見くらべて保存する（勝手には保存されない）。ノートの中身を読めないときは使わない。",
+  description: "Vault の今あるノートを直す案を出す。呼ぶと画面に「くろの直し案」のボタンが出て、サキちゃんが編集画面で見くらべて保存する（勝手には保存されない）。先に今のノートの中身を全部読んでから使う。読めないときは使わない。",
   input_schema: {
     type: "object", additionalProperties: false, required: ["path", "reason", "content"],
     properties: {
       path: { type: "string", description: "直すファイルのパス（例: notes/ノート名.md）" },
       reason: { type: "string", description: "何をどう直したか（短く）" },
-      content: { type: "string", description: "直したあとのファイルの中身ぜんぶ（frontmatter から最後まで）" },
+      content: { type: "string", description: "直したあとのファイルの中身ぜんぶ（frontmatter から最後まで）。直すところ以外は省略せずにそのまま写す" },
     },
   },
 };
+const CLOUD_CLIENT_TOOLS = [INBOX_TOOL, DIARY_TOOL, NOTE_TOOL, EDIT_TOOL];
 let chat = null, chatBusy = false, chatPics = [];
 // 「くろとおはなし」のつなぎ先: Claude API か、Mac のくろブリッジ（Mac の Claude Code・claude -p）。
 // ブリッジが配っているページ（…/app/。GitHub Pages は /kuro-app/）で開いたときはいつもブリッジ（同じ出どころ）。
@@ -1764,7 +1765,8 @@ async function callBridge() {
     r = await fetch(`${relayBase()}/chat`, {
       method: "POST",
       headers: { "content-type": "application/json", "x-kuro-code": relayCode() },
-      body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel() }),
+      // くろクラウドには、画面のボタンにする道具の定義も送る（道具を足すときは、ここ＝アプリだけ直せばいい）。ブリッジは印で出すので送らない
+      body: JSON.stringify({ system: kuroSystem(), messages: chat.messages, model: chatModel(), ...(viaCloud() ? { client_tools: CLOUD_CLIENT_TOOLS } : {}) }),
       signal: AbortSignal.timeout(210_000),  // ブリッジ側は3分で打ち切るので、それより少し長く待つ（くろクラウドも同じだけ待つ）
     });
   } catch { throw new Error(asleep); }
