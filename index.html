@@ -863,6 +863,7 @@ document.addEventListener("click", e => {
   if (e.target.id === "memo-send") sendMemo();
   else if (e.target.id === "set-save") saveSettings();
   else if (e.target.id === "set-chat-save") saveChatSettings();
+  else if (e.target.id === "set-update") updateApp();
 });
 window.addEventListener("hashchange", route);
 
@@ -1387,7 +1388,33 @@ ${viaCloud() ? `
         : viaBridge()
         ? `モデルは選ぶとすぐ切りかわるよ。くろは Mac の Claude Code で動くから、APIの料金はかからないかわりに、Claude のプランの枠を使うよ（くろは Vault を読むだけ）。使った量はブリッジのターミナルに出るよ。${servedByBridge ? "" : "Mac でブリッジと Tailscale の入口（serve）を起動して、この端末の Tailscale もオンにしてね。起動していないとつながらないよ。"}URLと合言葉はこの端末の中にだけ保存されるよ。合言葉はブリッジを起動するたびに変わるから、起動したら入れ直してね。`
         : "モデルは選ぶとすぐ切りかわるよ（キーの入れ直しはいらない）。APIキーはこのiPhoneの中にだけ保存されるよ。話した分だけ料金がかかるから、Claude Console で月の上限額を決めておいてね。"}</p>
+    </div>
+    <div class="form-card" style="margin-top: 16px">
+      <h3>アプリの更新</h3>
+      <button class="btn-main" id="set-update">アプリを最新にする</button>
+      <div class="form-msg" id="set-update-msg">いまの版: ${esc(appVersion())}</div>
+      <p class="form-hint">新しい機能が入ったら、ここを押してね。トークン・キー・今日の会話はそのまま残るよ（ブラウザで開き直さなくていい）。</p>
     </div>`;
+}
+// 今のページの版（GitHub Pages の Last-Modified）
+const appVersion = () => { const d = new Date(document.lastModified); return isNaN(d) ? "不明" : d.toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
+// アプリの殻を取り直して読み込み直す。ホーム画面のアプリはページを覚えていて（HTTP キャッシュ・Service Worker）、
+// 開き直しても古いままのことがあるので、キャッシュを飛ばして取ってから reload する。localStorage（トークンなど）は消さない
+async function updateApp() {
+  const msg = document.getElementById("set-update-msg");
+  msg.className = "form-msg"; msg.textContent = "最新の版を取ってきてる…";
+  try {
+    for (const reg of await navigator.serviceWorker?.getRegistrations?.() || []) await reg.update().catch(() => {});
+    if (window.caches) for (const k of await caches.keys()) await caches.delete(k);
+    const r = await fetch(location.pathname, { cache: "reload" });
+    if (!r.ok) throw new Error(r.status);
+    for (const f of ["index.html", "./"]) await fetch(f, { cache: "reload" }).catch(() => {});
+  } catch (e) {
+    msg.className = "form-msg ng"; msg.textContent = `取ってこられなかった（${e.message}）。電波を見てね`;
+    return;
+  }
+  msg.className = "form-msg ok"; msg.textContent = "読み込み直すよ！";
+  setTimeout(() => location.reload(), 300);
 }
 async function saveChatSettings() {
   store.set("chatModel", document.getElementById("set-chat-model").value);

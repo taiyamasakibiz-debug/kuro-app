@@ -1,4 +1,4 @@
-const CACHE = "kuro-app-v31";
+const CACHE = "kuro-app-v32";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png", "chibi-kuro.png"];
 
 self.addEventListener("install", (e) => {
