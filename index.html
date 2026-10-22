@@ -1511,6 +1511,21 @@ const NOTE_TOOL = {
     },
   },
 };
+const SCHEDULE_TOOL = {
+  name: "add_to_schedule",
+  description: "サキちゃんが「予定に入れて」「カレンダーに入れて」と言ったとき、または話の中で日にちの決まった予定（旅行・予約・ライブなど）が出て残したほうがよさそうなときに、予定ノート（schedule/）を新しく作ることを提案する。資料の「これからの予定」にもうある予定は作らない（足すなら add_to_note）。呼ぶと画面に「予定に入れとく？」のボタンが出て、サキちゃんがOKしたときだけ作られる。勝手には保存されない。Googleカレンダーには入らない。",
+  strict: true,
+  input_schema: {
+    type: "object", additionalProperties: false, required: ["date", "time", "place", "title", "details"],
+    properties: {
+      date: { type: "string", description: "予定の日（YYYY-MM-DD）。「来週の土曜」などは今日の日付から計算する。分からなければ提案せずにサキちゃんに聞く" },
+      time: { type: "string", description: "時間（16:00 か 16:00〜18:00）。決まっていなければ空文字" },
+      place: { type: "string", description: "場所。決まっていなければ空文字" },
+      title: { type: "string", description: "予定の内容（短く。例: 瑠璃光院 秋の特別拝観）。ファイル名になる。日付は自動でつくので入れない" },
+      details: { type: "string", description: "「## 詳細」に入れる箇条書き（「- 」で始まる行。誰と・持ち物など、サキちゃんが言ったことだけ）。なければ空文字。パスワード・カード番号など機微な情報は書かない" },
+    },
+  },
+};
 // くろの直し案。ブリッジのくろ（Vault を読める）が <edit> の印で出したものを、この形にする。くろクラウドには道具として渡す。
 // Claude API のくろはノートの中身を読めないので、自分からは使わない。会話の途中でブリッジから API に切りかえたとき、
 // 履歴に残った propose_edit を API が受けつけるように、そのときだけ定義を渡す
@@ -1544,7 +1559,7 @@ const DRAW_TOOL = {
   },
 };
 const drawReady = () => !!store.get("cloudCode") && !!store.get("cloudUrl");  // 絵はいつもくろクラウドで描く（つなぎ先がブリッジ・API でも）
-const chatTools = () => [INBOX_TOOL, DIARY_TOOL, NOTE_TOOL, ...(drawReady() ? [DRAW_TOOL] : [])];
+const chatTools = () => [INBOX_TOOL, DIARY_TOOL, NOTE_TOOL, SCHEDULE_TOOL, ...(drawReady() ? [DRAW_TOOL] : [])];
 const CLOUD_CLIENT_TOOLS = () => [...chatTools(), EDIT_TOOL];
 let chat = null, chatBusy = false, chatPics = [];
 // 「くろとおはなし」のつなぎ先: Claude API か、Mac のくろブリッジ（Mac の Claude Code・claude -p）。
@@ -1625,6 +1640,8 @@ function initChat() {
     if (b) decideInbox(b.dataset.inbox, b.dataset.answer === "yes");
     const dy = e.target.closest("[data-diary]");
     if (dy) decideAppend(dy.dataset.diary, dy.dataset.answer === "yes");
+    const sc = e.target.closest("[data-schedule]");
+    if (sc) decideSchedule(sc.dataset.schedule, sc.dataset.answer === "yes");
     const pr = e.target.closest("[data-proposal]");
     if (pr) openProposal(pr.dataset.proposal);
     const dr = e.target.closest("[data-draw]");
@@ -1720,6 +1737,13 @@ function renderChat() {
           d === "saved" ? `<p class="form-msg ok">${diary ? "日記に入れた" : "ノートに足した"}よ</p>` : d === "declined" ? `<p class="form-msg">今回は入れなかったよ</p>` : d === "saving" ? `<p class="form-msg">入れてる…</p>`
           : `<div class="row"><button class="btn" data-diary="${esc(b.id)}" data-answer="yes">入れる</button><button class="btn" data-diary="${esc(b.id)}" data-answer="no">やめとく</button></div>`}</div>`);
       }
+      if (b.type === "tool_use" && b.name === "add_to_schedule") {
+        const d = chat.decisions[b.id], when = [b.input.date, b.input.time].filter(Boolean).join(" ");
+        items.push(`<div class="propose"><p>📅 予定に入れとく？<br><b>${esc(b.input.title)}</b><br><small>${esc(when)}${b.input.place ? ` ・ ${esc(b.input.place)}` : ""}</small>${
+          b.input.details?.trim() ? `<br><small>${esc(b.input.details.trim())}</small>` : ""}</p>${
+          d === "saved" ? `<p class="form-msg ok">予定に入れたよ</p>` : d === "declined" ? `<p class="form-msg">今回は入れなかったよ</p>` : d === "saving" ? `<p class="form-msg">入れてる…</p>`
+          : `<div class="row"><button class="btn" data-schedule="${esc(b.id)}" data-answer="yes">入れる</button><button class="btn" data-schedule="${esc(b.id)}" data-answer="no">やめとく</button></div>`}</div>`);
+      }
       if (b.type === "tool_use" && b.name === "propose_edit") {
         const d = chat.decisions[b.id];
         items.push(`<div class="propose"><p>✏️ くろの直し案<br><b>${esc(b.input.path)}</b>${b.input.reason ? `<br><small>${esc(b.input.reason)}</small>` : ""}</p>${
@@ -1750,6 +1774,8 @@ function kuroSystem() {
   const recent = (VAULT?.days || []).slice(0, 3).map(d => `${d.date}（くろのきげん: ${d.mode}）\n` + d.lines.slice(0, 8).map(l => `- ${l}`).join("\n")).join("\n\n");
   const byFolder = {};
   for (const [name, n] of Object.entries(VAULT?.notes || {})) if (appendTarget(name)) (byFolder[n.folder] ||= []).push(name);
+  const upcoming = (VAULT?.events || []).filter(e => e.date >= date && e.status !== "中止").slice(0, 15)
+    .map(e => `- ${e.date}${e.time ? ` ${e.time}` : ""} ${e.title}${e.place ? `（${e.place}）` : ""} → ノート名: ${e.note}`).join("\n");
   const notesList = Object.entries(byFolder).map(([f, names]) => `${f}: ${names.sort().join(" / ")}`).join("\n");
   // 変わりにくい部分を先、日付や最近の日記を後ろに（プロンプトキャッシュが効くように）
   return `あなたは「くろ」。サキちゃんのセカンドブレイン（Obsidian の Vault）にいる相棒で、職場の活発で優秀な後輩の女の子みたいなAI。今はサキちゃんのiPhoneの「くろアプリ」の中でおしゃべりしている。
@@ -1765,6 +1791,7 @@ function kuroSystem() {
 - 面白い気づきや残す価値のある話が出たら、save_to_inbox で「inboxに入れとく？」と提案してよい（毎回はしない）
 - サキちゃんが「日記に書いて」「日記にして」と言ったら、add_to_diary で日記への追記を提案する（画像を貼っていたら attach_images を true に）。inbox に入れるか日記に入れるかは、サキちゃんの言い方に合わせる
 - サキちゃんが今あるノート（お店・人・プロジェクトなど）に足してと言ったら、add_to_note で追記を提案する（画像を貼っていたら attach_images を true に）。ノート名は下の「ノートの一覧」から選ぶ。見出しが分からなければ section は空にする（推測で見出しを作らない）
+- サキちゃんが「予定に入れて」と言ったり、日にちの決まった予定の話が出たら、add_to_schedule で予定ノートを作ることを提案する（下の「これからの予定」にあるものは作らない。足すなら add_to_note）。日付があいまいなら先に聞く
 - サキちゃんは写真や画像を貼ることがある。見えたものを素直に話し、写っていないことを推測で盛らない
 ${drawReady() ? "- サキちゃんに「絵を描いて」と頼まれたら、draw_picture で「絵を描いていい？」と提案する（課金があるので、頼まれたときだけ。1回1枚）。くろやサキちゃんが出てくる絵なら refs に入れる（プロフィール画像で見た目がそろう）。描けた絵は次の発言で届くので、ひとこと感想を言う。日記などに貼りたいと言われたら attach_images を true にして提案する" : "- 今は絵を描けない（「せってい」にくろクラウドのURLと合言葉がないため）。頼まれたら、そう伝える"}
 
@@ -1780,6 +1807,9 @@ ${notesList || "（まだ読めていない）"}
 
 # 今日
 ${date}。今日のくろは「${mode}」モード（日付 ÷ 6 の余りで決まる）
+
+# これからの予定（schedule/ より）
+${upcoming || "（まだない）"}
 
 # 最近の日記（新しい順。要約）
 ${recent || "（まだ読めていない）"}
@@ -1856,6 +1886,7 @@ async function chatSend() {
       ? (saved ? "サキちゃんが直し案を見て、編集画面で保存した（そのまま、または手直しして）" : "サキちゃんは今回は直さなかった")
       : b.name === "add_to_diary" ? (saved ? "サキちゃんがOKして、日記に追記した" : "サキちゃんは今回は日記に入れなかった")
       : b.name === "add_to_note" ? (saved ? "サキちゃんがOKして、ノートに追記した" : "サキちゃんは今回はノートに足さなかった")
+      : b.name === "add_to_schedule" ? (saved ? "サキちゃんがOKして、予定ノートを作った" : chat.decisions[b.id + ":dup"] ? "同じ名前の予定ノートがもうあったので作らなかった" : "サキちゃんは今回は予定に入れなかった")
       : (saved ? "サキちゃんがOKして、inboxに保存した" : "サキちゃんは今回は保存しなかった") });
   }
   const pics = chatPics;
@@ -2017,6 +2048,44 @@ async function decideAppend(id, yes) {
   } catch (e) {
     delete chat.decisions[id];
     chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text: `${where}に入れられなかった（${e.message}）。「せってい」のGitHubトークンを確認してね` });
+  }
+  saveChat(); renderChat();
+}
+
+// くろの add_to_schedule 提案をOKしたとき: templates/schedule.md の形で schedule/YYYY-MM-DD 内容.md を作る（同じ名前があったら作らない）
+async function decideSchedule(id, yes) {
+  if (chat.decisions[id] === "saved" || chat.decisions[id] === "saving") return;
+  if (!yes) { chat.decisions[id] = "declined"; saveChat(); renderChat(); return; }
+  const block = chat.messages.flatMap(m => typeof m.content === "string" ? [] : m.content).find(b => b.id === id);
+  if (!block) return;
+  const { date, time, place, details } = block.input, what = safeName(block.input.title || "");
+  const fail = text => { delete chat.decisions[id]; chat.notes = (chat.notes || []).concat({ after: chat.messages.length - 1, text }); saveChat(); renderChat(); };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !what) return fail("予定の日付か内容が分からなかった。くろにもう一度言ってね");
+  const name = `${date} ${what}`, path = `schedule/${name}.md`;
+  chat.decisions[id] = "saving"; renderChat();
+  try {
+    const t = await readFile("templates/schedule.md");
+    const today = todayJst(), oneLine = x => (x || "").replace(/\s+/g, " ").trim();
+    const fill = x => (x || "").replace(/\{\{date:YYYY-MM-DD\}\}/g, today).replace(/\{\{date\}\}/g, today).replace(/\{\{title\}\}/g, what);
+    const front = (fill(t?.front) || `---\ntype: schedule\ncreated: ${today}\ndate:\ntime:\nplace:\nstatus: 予定\ntags: [予定]\n---`)
+      .replace(/^date:.*$/m, `date: ${date}`).replace(/^time:.*$/m, `time: ${oneLine(time)}`.trimEnd()).replace(/^place:.*$/m, `place: ${oneLine(place)}`.trimEnd());
+    let text = fill(t?.body) || `# ${what}\n\n## 詳細\n- \n`;
+    const lines = (details || "").trim();
+    if (lines) text = /^- *$/m.test(text) ? text.replace(/^- *$/m, lines) : addToSection(text, "## 詳細", lines);
+    text += "\n（くろアプリの「くろとおはなし」から。くろが提案して、サキちゃんがOK）\n";
+    const r = await ghApi(`contents/${encPath(path)}`, {
+      method: "PUT", body: JSON.stringify({ message: `schedule: ${name}（くろとおはなしから）`, content: b64(front + "\n" + text), branch: writeBranch() }),
+    });
+    if (r.status === 422) { chat.decisions[id + ":dup"] = true; throw new Error(`「${name}」はもうあるよ`); }
+    if (!r.ok) throw new Error(r.status);
+    const edits = readJson("noteEdits", {});
+    edits[name] = { sha: (await r.json()).content.sha, folder: "schedule", front, body: text, at: Date.now() };
+    store.set("noteEdits", JSON.stringify(edits));
+    applyEdits(VAULT);
+    chat.decisions[id] = "saved";
+    refresh();
+  } catch (e) {
+    return fail(`予定に入れられなかった（${e.message}）。${chat.decisions[id + ":dup"] ? "" : "「せってい」のGitHubトークンを確認してね"}`);
   }
   saveChat(); renderChat();
 }

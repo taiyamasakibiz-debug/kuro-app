@@ -112,6 +112,10 @@ images は、サキちゃんが直前に貼った画像も一緒に残すなら 
 <note name="ノート名（フォルダ名や .md なし）" section="## 足す先の見出し（末尾なら空）" title="画像のファイル名になる短いタイトル" images="true">ノートに足す文章（画像だけなら空）</note>
 画面では「日記に入れとく？」「ノートに足しとく？」のボタンになり、サキちゃんがOKしたらアプリが画像を保存して ![[画像]] つきで足す。画像の埋め込みは自分で書かない。新しいノートは作れない。
 
+サキちゃんが「予定に入れて」と言ったり、日にちの決まった予定の話が出たら、返事の最後に次の形を1つだけ書く（schedule/ に同じ予定がもうあるときは書かない。日付があいまいなら先に聞く）:
+<schedule date="YYYY-MM-DD" time="16:00 か 16:00〜18:00（なければ空）" place="場所（なければ空）" title="予定の内容（短く・日付は入れない）">「## 詳細」に入れる箇条書き（「- 」で始まる行。なければ空）</schedule>
+画面では「予定に入れとく？」のボタンになり、サキちゃんがOKしたらアプリが schedule/YYYY-MM-DD 内容.md をひな形の形で作る。schedule/ には自分で書かない。
+
 サキちゃんに「絵を描いて」と頼まれたら（絵を描けるとシステムプロンプトに書いてあるときだけ）、返事の最後に次の形を1つだけ書く:
 <draw caption="どんな絵か（日本語・短く）" refs="kuro,saki のうち出てくる人（いなければ空）" size="square か landscape か portrait" pasted="true か false">画像生成への指示（英語）。refs の人は「the girl in reference image 1」のように kuro, saki の順で指す。画像の中の文字は入れない。日記やノートの中身・個人情報は書かない</draw>
 pasted は、サキちゃんが直前に貼った写真も参考にするなら true。画面では「絵を描いていい？」のボタンになり、サキちゃんがOKしたらアプリが描く（課金あり・1枚）。描いた絵は次の発言で届く。日記などに貼るときは、そのあと <diary> などを images="true" で。`;
@@ -156,6 +160,7 @@ function blockText(b) {
   if (b.type === "tool_use" && b.name === "save_to_inbox") return `（くろが「inboxに入れとく？」と提案: ${b.input?.title || ""}）`;
   if (b.type === "tool_use" && b.name === "add_to_diary") return `（くろが「日記に入れとく？」と提案: ${b.input?.date || ""}）`;
   if (b.type === "tool_use" && b.name === "add_to_note") return `（くろが「ノートに足しとく？」と提案: ${b.input?.note || ""}）`;
+  if (b.type === "tool_use" && b.name === "add_to_schedule") return `（くろが「予定に入れとく？」と提案: ${b.input?.date || ""} ${b.input?.title || ""}）`;
   if (b.type === "tool_use" && b.name === "propose_edit") return `（くろが直し案を出した: ${b.input?.path || ""} ${b.input?.reason || ""}）`;
   if (b.type === "tool_use" && b.name === "draw_picture") return `（くろが「絵を描いていい？」と提案: ${b.input?.caption || ""}）`;
   if (b.type === "tool_result") return `（さっきの提案の結果: ${typeof b.content === "string" ? b.content
@@ -181,7 +186,7 @@ function chatInput(messages) {
   return JSON.stringify({ type: "user", message: { role: "user", content } }) + "\n";
 }
 
-// 返事の最後の印（<inbox>・<diary>・<note>・<edit>）を、アプリの tool_use の形に直す
+// 返事の最後の印（<inbox>・<diary>・<note>・<schedule>・<draw>・<edit>）を、アプリの tool_use の形に直す
 function toApiContent(text) {
   const tools = [];
   const take = (re, make) => {
@@ -197,6 +202,8 @@ function toApiContent(text) {
     input: { date: attr(m[1], "date"), title: attr(m[1], "title"), body: m[2].trim(), attach_images: attr(m[1], "images") !== "false" } }));
   take(/<note\b([^>]*)>([\s\S]*?)<\/note>/, (m) => ({ name: "add_to_note",
     input: { note: attr(m[1], "name"), section: attr(m[1], "section"), title: attr(m[1], "title"), body: m[2].trim(), attach_images: attr(m[1], "images") !== "false" } }));
+  take(/<schedule\b([^>]*)>([\s\S]*?)<\/schedule>/, (m) => ({ name: "add_to_schedule",
+    input: { date: attr(m[1], "date").trim(), time: attr(m[1], "time").trim(), place: attr(m[1], "place").trim(), title: attr(m[1], "title").trim(), details: m[2].trim() } }));
   take(/<draw\b([^>]*)>([\s\S]*?)<\/draw>/, (m) => ({ name: "draw_picture",
     input: { prompt: m[2].trim(), caption: attr(m[1], "caption"), refs: attr(m[1], "refs").split(",").map((s) => s.trim()).filter((s) => s === "kuro" || s === "saki"),
       use_pasted_images: attr(m[1], "pasted") === "true", size: ["square", "landscape", "portrait"].includes(attr(m[1], "size")) ? attr(m[1], "size") : "square" } }));
