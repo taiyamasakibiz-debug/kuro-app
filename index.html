@@ -1815,6 +1815,7 @@ function kuroSystem() {
 - スマホのチャットなので短めに（ふだんは1〜3文）。見出しや表は使わない。絵文字は少しだけ
 - 今日のモードのふるまいで話す。ただしサキちゃんが落ち込んでいたり、真面目な相談のときは、モードより真剣に寄り添う
 - 下の資料に書いていないサキちゃんのことを、推測で決めつけない。知らないことは聞く
+- 前の返事に「（道具の記録: …）」が付いていたら、それは本当に Vault を読んだ・書いたの証拠。「読んだ？」「足した？」と聞かれたら、まずその記録を見て答える。記録にあることを、覚えがないからと疑って謝らない。記録がないときは、記憶で「読んでなかったかも」「まだ書いてなかった」と謝らず、${viaBridge() || viaCloud() ? "「記録が見えないから確認するね」と言って、Vault を見に行って確かめてから答える" : "今は Vault を見に行けないので、「ここからは確かめられない」と正直に言う（読んだ・書いてないと決めつけない）"}。この記録の書き方は真似して返事に書かない
 - 面白い気づきや残す価値のある話が出たら、save_to_inbox で「inboxに入れとく？」と提案してよい（毎回はしない）
 - サキちゃんが「日記に書いて」「日記にして」と言ったら、add_to_diary で日記への追記を提案する（画像を貼っていたら attach_images を true に）。inbox に入れるか日記に入れるかは、サキちゃんの言い方に合わせる
 - サキちゃんが今あるノート（お店・人・プロジェクトなど）に足してと言ったら、add_to_note で追記を提案する（画像を貼っていたら attach_images を true に）。ノート名は下の「ノートの一覧」から選ぶ。見出しが分からなければ section は空にする（推測で見出しを作らない）
@@ -1878,7 +1879,7 @@ async function callClaude() {
   if (sonnet) headers["anthropic-beta"] = "server-side-fallback-2026-07-01";  // 断られたときは別のモデルで答え直す
   const body = {
     model, max_tokens: 16000,
-    system: kuroSystem(), messages: chat.messages,
+    system: kuroSystem(), messages: chat.messages.map(({ trace, ...m }) => m),  // trace は Claude API の形ではないので外す
     // 履歴に残った道具は、定義がないと API が受けつけないので渡す（絵の道具は、くろクラウドの設定を消したあとも）
     tools: [...new Set([...chatTools(), ...[EDIT_TOOL, DRAW_TOOL].filter(t => chat.messages.some(m => typeof m.content !== "string" && m.content.some(b => b.name === t.name)))])],
     output_config: { effort: "low" },  // おしゃべりなので軽め
@@ -1926,7 +1927,8 @@ async function chatSend() {
   try {
     const res = await callClaude();
     if (res.stop_reason === "refusal" || !res.content?.length) throw new Error("ごめん、それにはうまく答えられないみたい");
-    chat.messages.push({ role: "assistant", content: res.content });
+    // trace＝道具で読んだ・書いたの短い記録（ブリッジ／くろクラウドが返す）。次の発言でも、くろが自分の行動を確かめられるように返事といっしょに持つ
+    chat.messages.push({ role: "assistant", content: res.content, ...(res.trace?.length ? { trace: res.trace.slice(0, 12) } : {}) });
     // 送れた絵は履歴（tool_result）に入ったので、二重に持たない
     for (const b of content) if (b.type === "tool_result" && Array.isArray(b.content)) delete chat.drawn?.[b.tool_use_id];
   } catch (e) {
